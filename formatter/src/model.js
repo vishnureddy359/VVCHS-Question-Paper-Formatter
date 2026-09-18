@@ -112,7 +112,7 @@ const RE = {
   orTrail: /\s+OR\s*$/,
   optLabel: /(?<=^|\s)\(?([a-dA-D])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
   optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
-  subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङचछजझ])\)\s*/i,
+  subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङडचछजझ])\)\s*/i,
   subDot: /^([a-h])\.\s+(?=[A-Za-z(])/,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
   direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q)/i,
@@ -308,8 +308,9 @@ function romanItems(text) {
   let m;
   while ((m = RE.optRoman.exec(text))) items.push({ label: m[1], labelStart: m.index, textStart: m.index + m[0].length });
   if (items.length < 2 || items[0].labelStart !== 0) return null;
-  const order = ["i", "ii", "iii", "iv"];
-  if (!items.every((it, k) => it.label.toLowerCase() === order[k])) return null;
+  const order = ["i", "ii", "iii", "iv", "v", "vi"];
+  const start = order.indexOf(items[0].label.toLowerCase());
+  if (start < 0 || !items.every((it, k) => it.label.toLowerCase() === order[start + k])) return null;
   return items;
 }
 
@@ -530,6 +531,13 @@ class Builder {
       return n;
     }
     if (isCentered && text.length < 60 && /assertion|reason|case|study|passage/i.test(text)) {
+      this.newNote(runs, { center: true });
+      finish();
+      return;
+    }
+    // a short centred title between questions ("व्याकरण:", "Grammar") is a part heading, not part of the question above
+    if (isCentered && text.length <= 40 && text.split(/\s+/).length <= 4 && !/^[(\[]/.test(text) && !/[,?_.…]/.test(text)
+        && !line.images.length && !/^\(?[a-z0-9]{1,3}[).]/i.test(text)) {
       this.newNote(runs, { center: true });
       finish();
       return;
@@ -852,10 +860,25 @@ function buildModel(parsed, filename) {
   }
   const b = new Builder(body, parsed.blocks, header).run();
   if (!b.sections.length && b.preamble.some((e) => e.kind === "question")) {
-    // a paper without section headings (typical for primary classes): treat it as one unnamed section
-    const s = { letter: "", rest: "", runs: [], marksExpr: null, entries: b.preamble.splice(0), instr: [], implicit: true };
-    for (const e of s.entries) postProcessEntry(e, s);
-    b.sections.push(s);
+    // a paper without section headings (typical for primary classes): one unnamed section, split into
+    // parts wherever a centred title (e.g. "व्याकरण:") is followed by numbering that starts again
+    const entries = b.preamble.splice(0);
+    let cur = { letter: "", rest: "", runs: [], marksExpr: null, entries: [], instr: [], implicit: true, title: null };
+    b.sections.push(cur);
+    let lastNumber = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const next = entries[i + 1];
+      if (e.kind === "note" && e.center && next && next.kind === "question" && next.number != null && next.number <= lastNumber && cur.entries.some((x) => x.kind === "question")) {
+        cur = { letter: "", rest: "", runs: [], marksExpr: null, entries: [], instr: [], implicit: true, title: e.items[0] ? e.items[0].runs : null };
+        b.sections.push(cur);
+        lastNumber = 0;
+        continue;
+      }
+      if (e.kind === "question" && e.number != null) lastNumber = e.number;
+      cur.entries.push(e);
+    }
+    for (const s of b.sections) for (const e of s.entries) postProcessEntry(e, s);
   }
   const model = { header, sections: b.sections, preamble: b.preamble, stats: b.stats, naming: canonicalName(header, filename), source: filename };
   inferMarks(model);

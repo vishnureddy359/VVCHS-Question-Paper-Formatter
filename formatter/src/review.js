@@ -124,11 +124,18 @@ function review(model, opts = {}) {
 
   // ---------------------------------------------------------------- 3. numbering & structure
   const numbers = [];
-  for (const s of model.sections) for (const g of groupQuestions(s)) numbers.push(g.number);
-  const seen = new Set(), dups = [], gaps = [];
-  let expect = numbers.length ? numbers[0] : 1;
-  if (numbers.length && numbers[0] !== 1) f.structure.push(`Numbering starts at Q${numbers[0]}.`);
+  for (const s of model.sections) {
+    const nums = groupQuestions(s).map((g) => g.number);
+    if (s.title && nums.length) numbers.push("restart");
+    numbers.push(...nums);
+  }
+  let seen = new Set(), expect = 1;
+  const dups = [], gaps = [];
+  const firstNum = numbers.find((n) => n !== "restart");
+  if (firstNum != null && firstNum !== 1) f.structure.push(`Numbering starts at Q${firstNum}.`);
+  if (firstNum != null) expect = firstNum;
   for (const num of numbers) {
+    if (num === "restart") { seen = new Set(); expect = 1; continue; }
     if (seen.has(num)) dups.push(num);
     seen.add(num);
     while (expect < num) { gaps.push(expect); expect++; }
@@ -195,7 +202,9 @@ function review(model, opts = {}) {
   // ---------------------------------------------------------------- 4. figures carried over / dropped
   const carried = [];
   for (const s of model.sections) for (const e of s.entries) {
-    const imgs = e.items.filter((x) => x.kind === "image").length + e.items.filter((x) => x.kind === "images").reduce((a, x) => a + x.images.length, 0);
+    const inCells = (t) => t.rows.reduce((a, row) => a + row.reduce((b, c) => b + c.paragraphs.reduce((d, p) => d + ((p.images || []).length), 0), 0), 0);
+    const imgs = e.items.filter((x) => x.kind === "image").length + e.items.filter((x) => x.kind === "images").reduce((a, x) => a + x.images.length, 0)
+      + e.items.filter((x) => x.kind === "table").reduce((a, x) => a + inCells(x.table), 0) + e.items.filter((x) => x.kind === "tables").reduce((a, x) => a + x.tables.reduce((b, t) => b + inCells(t), 0), 0);
     const tbls = e.items.filter((x) => x.kind === "table").length + e.items.filter((x) => x.kind === "tables").reduce((a, x) => a + x.tables.length, 0);
     if (imgs || tbls) carried.push(`${qLabel(e)}${imgs ? ` (${imgs} image${imgs > 1 ? "s" : ""})` : ""}${tbls ? ` (${tbls} table${tbls > 1 ? "s" : ""})` : ""}`);
   }
