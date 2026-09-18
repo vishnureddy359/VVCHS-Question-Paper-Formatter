@@ -803,6 +803,34 @@ function collectHighlights(model) {
   });
 }
 
+// ---------------------------------------------------------------- garbled text
+
+// A Word file made by converting a PDF whose Devanagari font had no character map comes out as
+// scattered vowel signs and stray letters. In real Hindi/Marathi a vowel sign always follows a
+// consonant; here most of them follow a space or a Latin letter. Returns { marks, orphans, ratio }.
+function garbledDevanagari(text) {
+  let marks = 0, orphans = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if ((c >= 0x093e && c <= 0x094c) || c === 0x094d || c === 0x0902 || c === 0x0901) {
+      marks++;
+      const p = i > 0 ? text.charCodeAt(i - 1) : 0;
+      if (!(p >= 0x0905 && p <= 0x0939) && !(p >= 0x0958 && p <= 0x095f) && !(p >= 0x093e && p <= 0x094d)) orphans++;
+    }
+  }
+  return { marks, orphans, ratio: marks ? orphans / marks : 0 };
+}
+
+function garbledStats(model) {
+  const parts = [];
+  for (const s of model.sections) for (const e of s.entries) walkRuns(e, (runs) => parts.push(plain(runs)));
+  for (const e of model.preamble) walkRuns(e, (runs) => parts.push(plain(runs)));
+  const text = parts.join("\n");
+  const g = garbledDevanagari(text);
+  const latinNoise = (text.match(/[`¸˛ēVR9O5k7](?=[\s\u0900-\u097F])/g) || []).length;
+  return Object.assign(g, { latinNoise, garbled: g.marks >= 20 && g.ratio > 0.3 });
+}
+
 // ---------------------------------------------------------------- entry point
 
 function buildModel(parsed, filename) {
@@ -833,7 +861,8 @@ function buildModel(parsed, filename) {
   inferMarks(model);
   fixDegrees(model);
   collectHighlights(model);
+  model.stats.garbled = garbledStats(model);
   return model;
 }
 
-module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, TEXT_W };
+module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, garbledDevanagari, TEXT_W };

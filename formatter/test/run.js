@@ -12,7 +12,7 @@ const path = require("path");
 const JSZip = require("jszip");
 const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, AlignmentType } = require("docx");
 const { parseDocx } = require("../src/parse");
-const { buildModel, plain } = require("../src/model");
+const { buildModel, plain, garbledDevanagari } = require("../src/model");
 const { review } = require("../src/review");
 const { formatPaper } = require("../src/index");
 
@@ -162,6 +162,12 @@ async function makeFixture() {
   const hxml = await (await JSZip.loadAsync(fs.readFileSync(hres.docx))).file("word/document.xml").async("string");
   assert.ok(/w:cs="Mangal"/.test(hxml), "Devanagari runs carry a complex-script font");
   assert.ok(!hxml.includes("SECTION "), "no section heading for an implicit section");
+
+  // --- garbled Devanagari (a PDF converted back to Word) is detected; real Hindi is not
+  const real = garbledDevanagari("देबू कौन सी कक्षा में पढ़ता था ? नैना की दादी के न आने का क्या कारण था ?");
+  assert.ok(real.marks > 10 && real.ratio < 0.1, JSON.stringify(real));
+  const junk = garbledDevanagari(". 1 : ि ि िO 9 ` ह 7 प ह ा ि ा ाह5 - क) द` कौ ी क ा ा Vा ? (i) ा ी Vी (ii) ी - ी क ी Vी");
+  assert.ok(junk.marks > 10 && junk.ratio > 0.5, JSON.stringify(junk));
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log("ok: formatter round-trip test passed");

@@ -50,10 +50,16 @@ function groupMarks(g) {
 }
 
 function review(model, opts = {}) {
-  const f = { marks: [], header: [], structure: [], wording: [], figures: [], changes: [] };
+  const f = { unreadable: [], marks: [], header: [], structure: [], wording: [], figures: [], changes: [] };
   let blocking = false;
   const block = (list, msg) => { list.push(msg + " **[blocking]**"); blocking = true; };
   const h = model.header;
+
+  // ---------------------------------------------------------------- 0. unreadable text
+  const g = model.stats.garbled;
+  if (g && g.garbled) {
+    block(f.unreadable, `The Devanagari text in this file is garbled (${g.orphans} of ${g.marks} vowel signs stand alone): the file looks like a PDF converted back to Word, which loses Hindi/Marathi text. Upload the original Word file the paper was typed in.`);
+  }
 
   // ---------------------------------------------------------------- 1. marks arithmetic
   const sectionTotals = [];
@@ -228,6 +234,7 @@ function review(model, opts = {}) {
     for (const x of list) lines.push(`- ${x}`);
     lines.push("");
   };
+  section("Unreadable text", f.unreadable);
   section("Marks", f.marks);
   section("Header / template", f.header);
   section("Structure", f.structure);
