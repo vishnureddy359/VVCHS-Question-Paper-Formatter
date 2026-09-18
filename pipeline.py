@@ -2,17 +2,18 @@
 """
 pipeline.py — run the VVCHS question-paper pipeline against the Drive folders.
 
-For every .docx in 1_Inbox:
-  1. download it through the bridge (qp.py)
+For every .docx or .pdf in 1_Inbox:
+  1. download it through the bridge (qp.py); a PDF is first converted to .docx with pdf_to_docx.py
   2. run the formatter (formatter/src/index.js) -> <Name>.docx + <Name>_REVIEW.md
   3. route the result:
        no blocking issues  -> <Name>.docx + REVIEW to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
        blocking issues     -> REVIEW to 3_Needs-Fixes, original moved there unchanged
+       PDF whose text cannot be read -> note asking for the Word file to 3_Needs-Fixes, original moved there
        formatter error     -> left in 1_Inbox, reported
        output already in the target folder (a move that stalled last run)
                            -> only the move of the original is redone, reported as "recovered"
 
-Files that are not .docx (notes, PDFs, stale review files) are left alone and listed.
+Files that are neither .docx nor .pdf (notes, stale review files) are left alone and listed.
 The inbox therefore only ever holds papers that still need processing, which makes
 re-running safe.
 
@@ -44,6 +45,14 @@ import qp
 ROOT = Path(__file__).resolve().parent
 FORMATTER = ROOT / "formatter" / "src" / "index.js"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MIME = "application/pdf"
+PDF_NOTE = ("## PDF source\n- The paper arrived as a PDF and was converted to Word before formatting. "
+            "Line breaks, stacked fractions, tables and figure placement come from the conversion — check them "
+            "against the PDF. Sending the original Word file gives a better result.\n")
+
+
+def is_pdf(entry: dict) -> bool:
+    return entry["name"].lower().endswith(".pdf") or entry["mimeType"] == PDF_MIME
 
 
 def log(msg: str) -> None:
@@ -87,6 +96,38 @@ def same_review(existing_id: str, ours: Path, work: Path) -> bool:
     return strip(theirs) == strip(ours.read_text(encoding="utf-8"))
 
 
+def route_unreadable(entry: dict, work: Path, needsfixes: dict, dry_run: bool, result: dict, why: str) -> dict:
+    """A PDF whose text cannot be read goes to 3_Needs-Fixes with a note asking for the Word file."""
+    name = entry["name"]
+    base = Path(name).stem
+    result["status"] = "unreadable"
+    result["name"] = base
+    review = work / "out" / base / f"{base}_REVIEW.md"
+    review.parent.mkdir(parents=True, exist_ok=True)
+    review.write_text(
+        f"# Review — {base}\n"
+        f"Source: {name} · Reviewed {time.strftime('%-d %b %Y')} · Status: NEEDS FIXES — moved to 3_Needs-Fixes\n\n"
+        "## Blocking\n"
+        f"- The text in this PDF cannot be read by software ({why}). **[blocking]**\n"
+        "- Please upload the original Word (.docx) file of this paper to 1_Inbox instead. "
+        "If the paper exists only as a PDF or a scan, tell the coordinator so it can be typed.\n",
+        encoding="utf-8")
+    log(f"UNREADABLE {name}: {why}")
+    if dry_run:
+        result["notes"].append("dry run: nothing uploaded or moved")
+        return result
+    review_name = free_name(needsfixes, base + "_REVIEW", ".md")
+    rid = qp.upload("needsfixes", review, review_name, "text/markdown")
+    needsfixes[review_name] = rid
+    result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
+    moved_name = free_name(needsfixes, base, Path(name).suffix)
+    mv = qp.move(entry["id"], "needsfixes", moved_name if moved_name != name else None)
+    needsfixes[mv["name"]] = mv["id"]
+    result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
+    log(f"  -> 3_Needs-Fixes: {review_name}, original moved as {mv['name']}")
+    return result
+
+
 def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive: dict, dry_run: bool) -> dict:
     """formatted / needsfixes / archive map file name -> id for the current folder contents."""
     formatted_names, needsfixes_names, archive_names = formatted, needsfixes, archive
@@ -96,6 +137,17 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     src_dir.mkdir(parents=True, exist_ok=True)
     src = qp.download(entry["id"], src_dir / name)
     log(f"downloaded {name} ({src.stat().st_size} bytes)")
+    from_pdf = is_pdf(entry)
+    if from_pdf:
+        from pdf_to_docx import convert, UnreadablePdfError  # imported here so the docx-only path needs no PyMuPDF
+        converted = src_dir / (Path(name).stem + ".docx")
+        try:
+            stats = convert(src, converted)
+        except UnreadablePdfError as e:
+            return route_unreadable(entry, work, needsfixes_names, dry_run, result, str(e))
+        log(f"converted PDF -> docx ({stats['pages']} pages, {stats['paragraphs']} paragraphs, {stats['images']} images, {stats['tables']} tables)")
+        src = converted
+        result["converted_from_pdf"] = stats
 
     out_dir = work / "out" / Path(name).stem
     if out_dir.exists():
@@ -111,6 +163,8 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     docx_path = Path(summary["docx"])
     review_path = Path(summary["review"])
     blocking = bool(summary["blocking"])
+    if from_pdf:
+        review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + PDF_NOTE, encoding="utf-8")
     result["name"] = base
     result["status"] = "needs-fixes" if blocking else "formatted"
     result["marks"] = summary.get("marks")
@@ -179,7 +233,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     inbox = qp.list_files("inbox")
-    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME]
+    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f)]
     others = [f["name"] for f in inbox if f not in papers]
     if args.only:
         papers = [f for f in papers if f["name"] == args.only]
@@ -188,7 +242,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
     log(f"inbox: {len(papers)} paper(s) to process" + (f", {len(others)} other file(s) left alone" if others else ""))
     for o in others:
-        log(f"  skipping non-docx: {o}")
+        log(f"  skipping (not .docx/.pdf): {o}")
 
     listing = lambda key: {f["name"]: f["id"] for f in qp.list_files(key)} if not args.dry_run else {}
     formatted_names, needsfixes_names, archive_names = listing("formatted"), listing("needsfixes"), listing("archive")
@@ -207,6 +261,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "formatted": sum(1 for r in results if r["status"] == "formatted"),
         "needs_fixes": sum(1 for r in results if r["status"] == "needs-fixes"),
         "recovered": sum(1 for r in results if r["status"] == "recovered"),
+        "unreadable": sum(1 for r in results if r["status"] == "unreadable"),
         "errors": sum(1 for r in results if r["status"] == "error"),
         "skipped": others,
         "results": results,
@@ -215,7 +270,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
-        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['recovered']} recovered, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
+        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['unreadable']} unreadable, {summary['recovered']} recovered, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
     return 1 if summary["errors"] else 0
 
 

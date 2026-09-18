@@ -39,7 +39,12 @@ function normalizeRuns(runs) {
     let text = "";
     for (const ch of r.text.replace(/[\u200b\u200c\u200d\ufeff]/g, "")) {
       const isSpace = ch === " " || ch === "\t" || ch === "\u00a0";
-      if (isSpace) { if (!prevSpace) text += " "; prevSpace = true; }
+      if (isSpace) {
+        if (!prevSpace) text += ch === "\t" ? "\t" : " ";
+        else if (ch === "\t" && text.endsWith(" ")) text = text.slice(0, -1) + "\t";
+        else if (ch === "\t" && !text && out.length && out[out.length - 1].text.endsWith(" ")) out[out.length - 1].text = out[out.length - 1].text.slice(0, -1) + "\t";
+        prevSpace = true;
+      }
       else { text += ch; prevSpace = false; }
     }
     if (text) out.push(cloneRun(r, text));
@@ -88,31 +93,34 @@ function splitLines(p) {
 const RE = {
   school: /vidya\s*vihar/i,
   exam: /\b(examination|exam|test|assessment)\b/i,
-  classLine: /\bclass\s*[:\-]?\s*([IVX]+|\d{1,2}(?:st|nd|rd|th)?)\b/i,
-  subject: /\bsubject\s*[:\-]?\s*([^\t]+?)\s*(?=\bmarks?\b|\bmax|\bm\.?m\.?|$)/i,
+  classLine: /\b(?:class|std\.?|standard|कक्षा)\s*[:\-]?\s*([IVX]+|\d{1,2}(?:st|nd|rd|th)?)\b/i,
+  subject: /\b(?:subject|sub\.?|विषय)\s*[:\-–]?\s*([^\t]+?)\s*(?=\bmarks?\b|\bmax|\bm\.?m\.?|\broll|\bname|\btime|$)/i,
+  nameLine: /^\s*(?:name|student'?s? name|नाम)\s*[:\-]/i,
   marks: /\b(?:max(?:imum)?\.?\s*)?marks?\s*[:\-]?\s*(\d+)/i,
   date: /\bdate\s*[:\-]?\s*([0-9]{1,2}[\/.\-][0-9]{1,2}[\/.\-][0-9]{2,4}|_+|[0-9]{1,2}\s+\w+\s+[0-9]{4})?/i,
-  time: /\btime\s*[:\-]?\s*([0-9½.:]+\s*(?:hours?|hrs?|h|minutes?|mins?)?(?:\s*[0-9]+\s*(?:minutes?|mins?))?)/i,
+  time: /\b(?:time|समय)\s*[:\-]?\s*([0-9½.:]+\s*(?:hours?|hrs?\.?|h|minutes?|mins?)?(?:\s*[0-9]+\s*(?:minutes?|mins?))?)/i,
   roll: /\broll\s*no/i,
   genInstr: /^general\s+instructions?\s*[:\-]?\s*$/i,
   genInstrInline: /^general\s+instructions?\s*[:\-]?\s*(.+)$/i,
   section: /^section\s*[-–—:]?\s*([a-e])\b\s*[-–—:.]?\s*(.*)$/i,
-  qDot: /^Q\.?\s*(\d{1,2})\s*[.):]?\s*/i,
+  qDot: /^(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*/i,
   qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
   qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
   altOnly: /^\(([AB])\)\s+/,
-  mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m)\s*\)|(\d+)\s*M(?:arks?)?)\s*$/i,
+  mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
   orTrail: /\s+OR\s*$/,
   optLabel: /(?<=^|\s)\(?([a-dA-D])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
-  subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
+  optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
+  subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङचछजझ])\)\s*/i,
   subDot: /^([a-h])\.\s+(?=[A-Za-z(])/,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
   direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q)/i,
   titleLine: /^(assertion|reason|case[\s-]*study|section|passage|multiple[\s-]*choice|mcq)/i,
   qSplit: /\s(\d+\s*M(?:arks?)?)\s+(?=(?:Q\.?\s*)?\d{1,2}\s*[.)]\s*[A-Za-z(])/i,
   endLine: /^[*\-_=~\s]*(end|all the best|best of luck)?[*\-_=~\s]*$/i,
-  marksExpr: /(\d+)\s*[×x*]\s*(\d+)\s*=\s*(\d+)\s*(?:marks?|m)?/i,
+  marksExpr: /(\d+)\s*[×x*]\s*(\d+)\s*=\s*(\d+)\s*(?:marks?|m|अंक)?/i,
+  marksProduct: /\(\s*(\d+)\s*[×x*]\s*(\d+)(?:\s*=\s*(\d+))?\s*(?:marks?|m|अंक)?\s*\)/i,
   totalOnly: /(\d+)\s*(?:marks?|m)\b/i,
 };
 
@@ -181,6 +189,7 @@ function parseHeader(lines, filename) {
     const tm = RE.time.exec(t);
     if (tm && /\btime\b/i.test(t)) { h.time = tm[1].trim(); matched = true; }
     if (RE.roll.test(t)) { h.rollNo = true; matched = true; }
+    if (RE.nameLine.test(t)) { h.nameLine = true; matched = true; }
     if (RE.genInstr.test(t)) {
       h.instrStart = true; matched = true;
       for (i = i + 1; i < lines.length; i++) {
@@ -203,8 +212,8 @@ function parseHeader(lines, filename) {
   h.consumed = i;
   if (!h.school && !h.exam && !h.cls && !h.subject) h.consumed = 0;
   // fill from filename
-  const fn = /^([A-Za-z]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_(\d{4}-\d{2,4})/.exec(filename || "");
-  h.fromFile = fn ? { subject: fn[1], cls: normalizeClass(fn[2]), exam: fn[3].toUpperCase(), session: fn[4] } : null;
+  const fn = /^([A-Za-z]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_(\d{4}[-_]\d{2,4})/.exec(filename || "");
+  h.fromFile = fn ? { subject: fn[1], cls: normalizeClass(fn[2]), exam: fn[3].toUpperCase(), session: fn[4].replace("_", "-") } : null;
   if (!h.cls && h.fromFile) { h.cls = h.fromFile.cls; h.missing.push("class"); }
   if (!h.subject && h.fromFile) { h.subject = h.fromFile.subject; h.missing.push("subject"); }
   if (!h.session && h.fromFile) h.session = h.fromFile.session.replace(/^(\d{4})-(\d{2})(\d{2})$/, "$1-$3");
@@ -222,7 +231,7 @@ function parseHeader(lines, filename) {
 
 const EXAM_CODES = [
   [/pre\s*-?\s*board/i, "PREBOARD"],
-  [/half\s*-?\s*yearly|\bhye\b|mid\s*-?\s*term/i, "HYE"],
+  [/half\s*-?\s*year(ly)?|\bhye\b|mid\s*-?\s*term|अर्धवार्षिक/i, "HYE"],
   [/annual|final|\bsa\s*-?\s*2\b/i, "ANNUAL"],
   [/(periodic|pt|unit)\s*(test|assessment)?\s*-?\s*(1|i|one)\b|\bpt\s*-?\s*1\b/i, "PT1"],
   [/(periodic|pt|unit)\s*(test|assessment)?\s*-?\s*(2|ii|two)\b|\bpt\s*-?\s*2\b/i, "PT2"],
@@ -243,8 +252,8 @@ function subjectSlug(subject) {
   if (/social/.test(s)) return "SocialScience";
   if (/^eng/.test(s)) return "English";
   if (/^sci/.test(s)) return "Science";
-  if (/^hindi/.test(s)) return "Hindi";
-  if (/^marathi/.test(s)) return "Marathi";
+  if (/^hindi/.test(s) || /हिन्दी|हिंदी/.test(subject)) return "Hindi";
+  if (/^marathi/.test(s) || /मराठी/.test(subject)) return "Marathi";
   if (/^sanskrit/.test(s)) return "Sanskrit";
   if (/computer|^it$|information/.test(s)) return "Computer";
   return subject.replace(/\(.*?\)/g, "").replace(/[^A-Za-z]+/g, "").replace(/^./, (c) => c.toUpperCase()) || "Paper";
@@ -266,6 +275,8 @@ function canonicalName(h, filename) {
 function parseMarksExpr(text) {
   const m = RE.marksExpr.exec(text);
   if (m) return { per: Number(m[1]), count: Number(m[2]), total: Number(m[3]), text: m[0] };
+  const pr = RE.marksProduct.exec(text);
+  if (pr) return { per: Number(pr[1]), count: Number(pr[2]), total: pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]), text: pr[0] };
   const t = RE.totalOnly.exec(text);
   if (t) return { per: null, count: null, total: Number(t[1]), text: t[0] };
   return null;
@@ -291,9 +302,20 @@ function optionItems(text) {
   return items;
 }
 
+function romanItems(text) {
+  const items = [];
+  RE.optRoman.lastIndex = 0;
+  let m;
+  while ((m = RE.optRoman.exec(text))) items.push({ label: m[1], labelStart: m.index, textStart: m.index + m[0].length });
+  if (items.length < 2 || items[0].labelStart !== 0) return null;
+  const order = ["i", "ii", "iii", "iv"];
+  if (!items.every((it, k) => it.label.toLowerCase() === order[k])) return null;
+  return items;
+}
+
 function splitOptions(runs) {
   const text = plain(runs);
-  const items = optionItems(text);
+  const items = optionItems(text) || romanItems(text);
   if (!items || items.length < 2) return null;
   return items.map((it, i) => {
     const end = i + 1 < items.length ? items[i + 1].labelStart : text.length;
@@ -415,7 +437,7 @@ class Builder {
     // question start: "Q.1.", "1.", "16.A) (a)", "10.(A)", or Word numbering at level 0
     let qm = RE.qDot.exec(text);
     let number = null, alt = null, cut = 0;
-    if (qm) { number = Number(qm[1]); cut = qm[0].length; }
+    if (qm) { number = Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))); cut = qm[0].length; }
     else if ((qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
     else if ((qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
     else if (numLabel && line.num.fmt === "decimal" && line.num.ilvl === 0 && /^\d+/.test(numLabel)) {
@@ -425,6 +447,16 @@ class Builder {
       if (a) { alt = a[1]; cut = a[0].length; }
     }
     if (number != null && number > 0 && number < 100) {
+      // a per-part expression "(1x5 M)" / "(1x5=5 M)" at the end of a question line is that question's marks
+      // (on a section instruction line the same expression is the section total and must stay in the text)
+      if (marks == null) {
+        const pr = RE.marksProduct.exec(text);
+        if (pr && pr.index + pr[0].length >= text.length - 1) {
+          marks = pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]);
+          runs = normalizeRuns(sliceRuns(runs, 0, pr.index));
+          text = plain(runs);
+        }
+      }
       const rest = stripPrefix(runs, cut);
       const restText = plain(rest);
       // a numbered line whose remainder is just "(A)" alternative marker
@@ -653,6 +685,22 @@ function postProcessEntry(e, section) {
     if (it.runs) dropWholeLineBold(it.runs);
     if (it.items) for (const o of it.items) dropWholeLineBold(o);
   }
+  // 2. three or more consecutive "left<TAB>right" lines are a matching exercise: keep the columns
+  const isPair = (it) => it.kind === "cont" && /^[^\t]{1,40}\t[^\t]{1,40}$/.test(plain(it.runs));
+  for (let i = 0; i < items.length; i++) {
+    if (!isPair(items[i])) { out.push(items[i]); continue; }
+    let j = i;
+    while (j < items.length && isPair(items[j])) j++;
+    if (j - i >= 3) {
+      const rows = items.slice(i, j).map((it) => {
+        const t = plain(it.runs), cut = t.indexOf("\t");
+        return [normalizeRuns(sliceRuns(it.runs, 0, cut)), normalizeRuns(sliceRuns(it.runs, cut + 1))];
+      });
+      out.push({ kind: "pairs", rows });
+      i = j - 1;
+    } else out.push(...items.slice(i, j)), (i = j - 1);
+  }
+  items.length = 0; items.push(...out); out.length = 0;
   const mcq = !!(section.marksExpr && section.marksExpr.per === 1) || /multiple\s*choice|mcq/i.test(section.rest + " " + section.instr.map(plain).join(" "));
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
@@ -755,6 +803,34 @@ function collectHighlights(model) {
   });
 }
 
+// ---------------------------------------------------------------- garbled text
+
+// A Word file made by converting a PDF whose Devanagari font had no character map comes out as
+// scattered vowel signs and stray letters. In real Hindi/Marathi a vowel sign always follows a
+// consonant; here most of them follow a space or a Latin letter. Returns { marks, orphans, ratio }.
+function garbledDevanagari(text) {
+  let marks = 0, orphans = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if ((c >= 0x093e && c <= 0x094c) || c === 0x094d || c === 0x0902 || c === 0x0901) {
+      marks++;
+      const p = i > 0 ? text.charCodeAt(i - 1) : 0;
+      if (!(p >= 0x0905 && p <= 0x0939) && !(p >= 0x0958 && p <= 0x095f) && !(p >= 0x093e && p <= 0x094d)) orphans++;
+    }
+  }
+  return { marks, orphans, ratio: marks ? orphans / marks : 0 };
+}
+
+function garbledStats(model) {
+  const parts = [];
+  for (const s of model.sections) for (const e of s.entries) walkRuns(e, (runs) => parts.push(plain(runs)));
+  for (const e of model.preamble) walkRuns(e, (runs) => parts.push(plain(runs)));
+  const text = parts.join("\n");
+  const g = garbledDevanagari(text);
+  const latinNoise = (text.match(/[`¸˛ēVR9O5k7](?=[\s\u0900-\u097F])/g) || []).length;
+  return Object.assign(g, { latinNoise, garbled: g.marks >= 20 && g.ratio > 0.3 });
+}
+
 // ---------------------------------------------------------------- entry point
 
 function buildModel(parsed, filename) {
@@ -775,11 +851,18 @@ function buildModel(parsed, filename) {
     body.push(it);
   }
   const b = new Builder(body, parsed.blocks, header).run();
+  if (!b.sections.length && b.preamble.some((e) => e.kind === "question")) {
+    // a paper without section headings (typical for primary classes): treat it as one unnamed section
+    const s = { letter: "", rest: "", runs: [], marksExpr: null, entries: b.preamble.splice(0), instr: [], implicit: true };
+    for (const e of s.entries) postProcessEntry(e, s);
+    b.sections.push(s);
+  }
   const model = { header, sections: b.sections, preamble: b.preamble, stats: b.stats, naming: canonicalName(header, filename), source: filename };
   inferMarks(model);
   fixDegrees(model);
   collectHighlights(model);
+  model.stats.garbled = garbledStats(model);
   return model;
 }
 
-module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, TEXT_W };
+module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, garbledDevanagari, TEXT_W };

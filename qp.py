@@ -117,7 +117,8 @@ def call(action: str, **fields) -> dict:
             return data
         except BridgeError as e:
             msg = str(e)
-            transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5")
+            # Apps Script's redirect target answers 404/5xx now and then for a file it serves fine a moment later
+            transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5") or msg.startswith("HTTP 404")
             if not transient or attempt == RETRIES:
                 raise
             last = e
