@@ -255,7 +255,9 @@ function canonicalName(h, filename) {
   const code = headerCode || fileCode || "EXAM";
   const session = (h.session || "").replace(/^(\d{4})-(\d{2})\d{2}$/, "$1-$2") || "session";
   const cls = h.cls || "Class";
-  const base = `${subjectSlug(h.subject)}_${cls}_${code}_${session}`;
+  // a teacher's re-upload keeps its _v2/_v3 suffix so the formatted copy never collides with the first one
+  const ver = /_v(\d+)(?=\.[A-Za-z0-9]+$|$)/i.exec(filename || "");
+  const base = `${subjectSlug(h.subject)}_${cls}_${code}_${session}` + (ver ? `_v${ver[1]}` : "");
   return { base, headerCode, fileCode, conflict: !!(headerCode && fileCode && headerCode !== fileCode) };
 }
 

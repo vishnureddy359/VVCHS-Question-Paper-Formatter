@@ -41,6 +41,7 @@ import mimetypes
 import os
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -72,10 +73,10 @@ def _ssl_context() -> ssl.SSLContext:
     return ctx
 
 
-def call(action: str, **fields) -> dict:
-    """POST one action to the bridge and return the decoded JSON reply."""
-    url, token = _config()
-    body = json.dumps({"token": token, "action": action, **fields}).encode("utf-8")
+RETRIES = 3  # Apps Script occasionally answers with an HTML error page or times out; retry those
+
+
+def _post_once(url: str, body: bytes) -> bytes:
     req = urllib.request.Request(
         url,
         data=body,
@@ -86,20 +87,42 @@ def call(action: str, **fields) -> dict:
     # urllib follows it with a GET, which is exactly what the bridge expects.
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS, context=_ssl_context()) as resp:
-            raw = resp.read()
+            return resp.read()
     except urllib.error.HTTPError as e:
         raise BridgeError(f"HTTP {e.code} from bridge: {e.read()[:300].decode('utf-8', 'replace')}") from e
-    except urllib.error.URLError as e:
-        raise BridgeError(f"cannot reach bridge: {e.reason}") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise BridgeError(f"cannot reach bridge: {getattr(e, 'reason', e)}") from e
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        snippet = raw[:300].decode("utf-8", "replace")
-        raise BridgeError(f"bridge did not return JSON (is the deployment URL right?): {snippet}") from e
-    if isinstance(data, dict) and "error" in data:
-        raise BridgeError(data["error"])
-    return data
+
+def call(action: str, **fields) -> dict:
+    """POST one action to the bridge and return the decoded JSON reply.
+
+    Transient failures (network errors, or Google's HTML error page instead of
+    JSON) are retried with backoff. Writes are retried too: 'upload' fails
+    cleanly on a duplicate name, and 'move' is idempotent.
+    """
+    url, token = _config()
+    body = json.dumps({"token": token, "action": action, **fields}).encode("utf-8")
+    last: Exception | None = None
+    for attempt in range(1, RETRIES + 1):
+        try:
+            raw = _post_once(url, body)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                snippet = raw[:200].decode("utf-8", "replace")
+                raise BridgeError(f"bridge did not return JSON (is the deployment URL right?): {snippet}") from e
+            if isinstance(data, dict) and "error" in data:
+                raise BridgeError(data["error"])  # a real answer from the bridge: do not retry
+            return data
+        except BridgeError as e:
+            msg = str(e)
+            transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5")
+            if not transient or attempt == RETRIES:
+                raise
+            last = e
+            time.sleep(2 ** attempt)
+    raise BridgeError(str(last))
 
 
 # ---------------------------------------------------------------- actions
