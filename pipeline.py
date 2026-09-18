@@ -2,8 +2,8 @@
 """
 pipeline.py — run the VVCHS question-paper pipeline against the Drive folders.
 
-For every .docx in 1_Inbox:
-  1. download it through the bridge (qp.py)
+For every .docx or .pdf in 1_Inbox:
+  1. download it through the bridge (qp.py); a PDF is first converted to .docx with pdf_to_docx.py
   2. run the formatter (formatter/src/index.js) -> <Name>.docx + <Name>_REVIEW.md
   3. route the result:
        no blocking issues  -> <Name>.docx + REVIEW to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
@@ -12,7 +12,7 @@ For every .docx in 1_Inbox:
        output already in the target folder (a move that stalled last run)
                            -> only the move of the original is redone, reported as "recovered"
 
-Files that are not .docx (notes, PDFs, stale review files) are left alone and listed.
+Files that are neither .docx nor .pdf (notes, stale review files) are left alone and listed.
 The inbox therefore only ever holds papers that still need processing, which makes
 re-running safe.
 
@@ -44,6 +44,14 @@ import qp
 ROOT = Path(__file__).resolve().parent
 FORMATTER = ROOT / "formatter" / "src" / "index.js"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MIME = "application/pdf"
+PDF_NOTE = ("## PDF source\n- The paper arrived as a PDF and was converted to Word before formatting. "
+            "Line breaks, stacked fractions, tables and figure placement come from the conversion — check them "
+            "against the PDF. Sending the original Word file gives a better result.\n")
+
+
+def is_pdf(entry: dict) -> bool:
+    return entry["name"].lower().endswith(".pdf") or entry["mimeType"] == PDF_MIME
 
 
 def log(msg: str) -> None:
@@ -96,6 +104,14 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     src_dir.mkdir(parents=True, exist_ok=True)
     src = qp.download(entry["id"], src_dir / name)
     log(f"downloaded {name} ({src.stat().st_size} bytes)")
+    from_pdf = is_pdf(entry)
+    if from_pdf:
+        from pdf_to_docx import convert  # imported here so the docx-only path needs no PyMuPDF
+        converted = src_dir / (Path(name).stem + ".docx")
+        stats = convert(src, converted)
+        log(f"converted PDF -> docx ({stats['pages']} pages, {stats['paragraphs']} paragraphs, {stats['images']} images, {stats['tables']} tables)")
+        src = converted
+        result["converted_from_pdf"] = stats
 
     out_dir = work / "out" / Path(name).stem
     if out_dir.exists():
@@ -111,6 +127,8 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     docx_path = Path(summary["docx"])
     review_path = Path(summary["review"])
     blocking = bool(summary["blocking"])
+    if from_pdf:
+        review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + PDF_NOTE, encoding="utf-8")
     result["name"] = base
     result["status"] = "needs-fixes" if blocking else "formatted"
     result["marks"] = summary.get("marks")
@@ -179,7 +197,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     inbox = qp.list_files("inbox")
-    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME]
+    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f)]
     others = [f["name"] for f in inbox if f not in papers]
     if args.only:
         papers = [f for f in papers if f["name"] == args.only]
@@ -188,7 +206,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
     log(f"inbox: {len(papers)} paper(s) to process" + (f", {len(others)} other file(s) left alone" if others else ""))
     for o in others:
-        log(f"  skipping non-docx: {o}")
+        log(f"  skipping (not .docx/.pdf): {o}")
 
     listing = lambda key: {f["name"]: f["id"] for f in qp.list_files(key)} if not args.dry_run else {}
     formatted_names, needsfixes_names, archive_names = listing("formatted"), listing("needsfixes"), listing("archive")

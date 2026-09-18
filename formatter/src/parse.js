@@ -368,9 +368,9 @@ class DocxParser {
   }
 }
 
-async function readRels(zip) {
+async function readRels(zip, part = "word/_rels/document.xml.rels") {
   const rels = new Map();
-  const f = zip.file("word/_rels/document.xml.rels");
+  const f = zip.file(part);
   if (!f) return rels;
   const root = findFirst({ root: parser.parse(await f.async("string")) }, "Relationships");
   if (!root) return rels;
@@ -382,6 +382,22 @@ async function readRels(zip) {
     rels.set(a.Id, target);
   }
   return rels;
+}
+
+// The page header of the first section: some teachers put the whole title block there.
+async function readFirstPageHeader(zip, body, rels, media, numbering, styles) {
+  const sect = findFirst(body, "w:sectPr");
+  if (!sect) return [];
+  const refs = children(sect, "w:headerReference");
+  const pick = refs.find((r) => attrs(r)["w:type"] === "first") || refs.find((r) => attrs(r)["w:type"] === "default");
+  if (!pick) return [];
+  const target = rels.get(attrs(pick)["r:id"]);
+  if (!target || !zip.file("word/" + target)) return [];
+  const partRels = await readRels(zip, "word/_rels/" + target.split("/").pop() + ".rels");
+  const root = findFirst({ root: parser.parse(await zip.file("word/" + target).async("string")) }, "w:hdr");
+  if (!root) return [];
+  const dp = new DocxParser(zip, partRels, media, numbering, styles);
+  return dp.parseBody(root).filter((b) => b.type === "table" || b.text.trim() || b.images.length);
 }
 
 async function readStyles(zip) {
@@ -417,6 +433,12 @@ async function parseDocx(buffer) {
   if (!body) throw new Error("word/document.xml has no body");
   const dp = new DocxParser(zip, rels, media, numbering, styles);
   const blocks = dp.parseBody(body);
+  // prepend the first page's header block when the body itself does not start with the school name
+  const bodyStart = blocks.filter((b) => b.type === "p" && b.text.trim()).slice(0, 4).map((b) => b.text).join(" ");
+  if (!/vidya\s*vihar/i.test(bodyStart)) {
+    const hdr = await readFirstPageHeader(zip, body, rels, media, numbering, styles);
+    if (hdr.some((b) => b.type === "p" && /vidya\s*vihar|class\s*:/i.test(b.text))) blocks.unshift(...hdr);
+  }
   return { blocks, mediaCount: media.size };
 }
 
