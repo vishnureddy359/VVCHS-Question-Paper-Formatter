@@ -59,6 +59,15 @@ processed originals always leave the inbox, re-running is safe.
 PDFs are second best: a PDF has no paragraphs, so the converter rebuilds them
 from line positions, stacked fractions are rejoined as `a/b`, and drawn shapes
 survive only as pictures. Teachers should send the Word file when they have it.
+A PDF whose text cannot be read at all (Word-generated Hindi/Marathi PDFs often
+embed the Mangal font without a character map, and scans have no text) is sent
+to `3_Needs-Fixes` with a note asking for the Word file.
+
+Hindi and Marathi papers are supported when they arrive as Word files: `प्र. 1`
+question numbers, `क) ख) ग)` sub-parts, `(i) (ii) (iii)` option rows, marks
+written as `(1x5 M)`, `(1 M)` or `अंक`, papers without section headings
+(primary classes), and matching exercises laid out as two columns. Devanagari
+runs are set in Mangal as the complex-script font.
 
 Each run writes `work/last_run.json` with the outcome per file. Exit code is 1
 if any file errored.

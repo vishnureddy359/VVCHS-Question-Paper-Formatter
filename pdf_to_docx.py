@@ -32,6 +32,10 @@ from docx.shared import Pt
 
 pymupdf.TOOLS.mupdf_display_errors(False)
 
+class UnreadablePdfError(Exception):
+    """The PDF's text cannot be extracted (e.g. an embedded font without a character map)."""
+
+
 ROW_TOL = 3.0        # points: lines whose tops are this close are one row
 TAB_GAP = 14.0       # points: horizontal gap that separates pieces of one row
 LABEL = re.compile(r"^\s*(Q\.?\s*\d+|\d{1,2}\s*[.)]|\(?[a-dA-D][).]|\(?(?:i{1,3}|iv|v|vi{0,3})\)|OR\b|Section\b|SECTION\b|Assertion|Reason|Direction|Note|Class\s*:|Date\s*:|Roll\s*No|Time\s*:|General\s+Instructions)", re.I)
@@ -226,10 +230,37 @@ def join_wrapped(items, text_right, left_edge):
     return out
 
 
+def check_readable(doc) -> dict:
+    """Word-generated PDFs with subset Devanagari fonts often carry no ToUnicode map: every glyph
+    extracts as a space. Measure how much of the text is real before trusting it."""
+    letters = spaces = 0
+    for page in doc:
+        for b in page.get_text("dict")["blocks"]:
+            if b["type"] != 0:
+                continue
+            for l in b["lines"]:
+                for sp in l["spans"]:
+                    for ch in sp["text"]:
+                        if ch.isspace():
+                            spaces += 1
+                        elif ch.isalnum():
+                            letters += 1
+    total = letters + spaces
+    ratio = letters / total if total else 0.0
+    return {"letters": letters, "spaces": spaces, "ratio": ratio}
+
+
 def convert(pdf_path: Path, docx_path: Path) -> dict:
     doc = pymupdf.open(str(pdf_path))
+    readable = check_readable(doc)
+    # normal text runs at roughly 15-20% spaces; a font with no character map gives mostly spaces
+    if readable["letters"] < 50 or readable["ratio"] < 0.45:
+        raise UnreadablePdfError(
+            f"only {readable['letters']} readable characters against {readable['spaces']} blanks: "
+            "the PDF's text layer is unusable (an embedded font without a character map, or a scanned page). "
+            "Ask for the Word file.")
     out = Document()
-    stats = {"pages": len(doc), "paragraphs": 0, "images": 0, "tables": 0}
+    stats = {"pages": len(doc), "paragraphs": 0, "images": 0, "tables": 0, "readable_ratio": round(readable["ratio"], 2)}
     for page in doc:
         boxes = find_table_boxes(page)
         items = collect(page, boxes)
@@ -287,7 +318,11 @@ def main(argv):
     if len(argv) != 3:
         print("usage: pdf_to_docx.py input.pdf output.docx", file=sys.stderr)
         return 1
-    stats = convert(Path(argv[1]), Path(argv[2]))
+    try:
+        stats = convert(Path(argv[1]), Path(argv[2]))
+    except UnreadablePdfError as e:
+        print(f"pdf_to_docx.py: {e}", file=sys.stderr)
+        return 2
     print(f"{argv[2]}: {stats['pages']} pages, {stats['paragraphs']} paragraphs, {stats['images']} images, {stats['tables']} tables")
     return 0
 

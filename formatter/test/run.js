@@ -121,6 +121,46 @@ async function makeFixture() {
   assert.strictEqual(Object.keys(zip.files).filter((f) => f.startsWith("word/media/") && !zip.files[f].dir).length, 2, "logo + one figure");
   assert.ok(xml.includes("END"));
 
+  // --- a primary-class Hindi paper: header variants, no sections, Devanagari labels, (i)(ii)(iii) options, matching pairs
+  const hindiDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL CHANDRAPUR", { center: true, bold: true }),
+    p("HALF YEAR  EXAMINATION  2026-27", { center: true, bold: true }),
+    p("CLASS  :   II\t\tSUB – HINDI", { bold: true }),
+    p("DATE  :      /09/2026\t\tROLL NO.____\t\tMARKS: 15 MARKS", { bold: true }),
+    p("NAME : ..................\t\tTIME   : 3.00 HRS", { bold: true }),
+    p("प्र. 1 : निम्नलिखित प्रश्नों के सही उत्तर पर सही का निशान लगाइए -        (1x5 M)", { bold: true }),
+    p("क)   देबू कौन सी कक्षा में पढ़ता था ?"),
+    p("       (i) छठी          (ii) पाँचवी          (iii) चौथी"),
+    p("प्र. 2 : दिए गए शब्दों से रिक्त स्थान भरिए -        (1x 5=5 M)", { bold: true }),
+    p("क)   शुभो जब कमरे से बाहर निकला तो ______ सा लग रहा था |"),
+    p("प्र. 3 : कविता पूर्ण करें |        (1 M)", { bold: true }),
+    p("क)   केवल उनको मीत बनाना"),
+    p("प्र. 4 : सही मिलान कीजिए -        (4 M)", { bold: true }),
+    p("देश\t\tनिभाना"), p("विश्व\t\tनारा"), p("साथ\t\tभक्ति"), p("बुलंद\t\tशांति"),
+  ] }] });
+  const hindiPath = path.join(dir, "Hindi_II_HYE_2026_2027.docx");
+  fs.writeFileSync(hindiPath, await Packer.toBuffer(hindiDoc));
+  const hm = buildModel(await parseDocx(fs.readFileSync(hindiPath)), path.basename(hindiPath));
+  assert.strictEqual(hm.header.cls, "II");
+  assert.strictEqual(hm.header.subject, "HINDI");
+  assert.strictEqual(hm.header.marks, 15);
+  assert.strictEqual(hm.header.time, "3.00 HRS");
+  assert.strictEqual(hm.naming.base, "Hindi_II_HYE_2026-27", "HALF YEAR -> HYE, 2026_2027 -> 2026-27");
+  assert.strictEqual(hm.sections.length, 1);
+  assert.ok(hm.sections[0].implicit, "a paper without section headings gets one implicit section");
+  const hq = hm.sections[0].entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(hq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 1], [4, 4]]);
+  assert.strictEqual(hq[0].items.find((i) => i.kind === "sub").label, "(क)");
+  assert.deepStrictEqual(hq[0].items.find((i) => i.kind === "opts").items.map(plain), ["(i) छठी", "(ii) पाँचवी", "(iii) चौथी"]);
+  const pairs = hq[3].items.find((i) => i.kind === "pairs");
+  assert.ok(pairs && pairs.rows.length === 4 && plain(pairs.rows[0][0]) === "देश" && plain(pairs.rows[0][1]) === "निभाना", "matching pairs kept as columns");
+  const hrev = review(hm, { date: new Date("2026-09-18T06:00:00Z") });
+  assert.ok(hrev.markdown.includes("Adds up: questions 15 = 15 — matches the header (15 marks)."), hrev.markdown);
+  const hres = await formatPaper(hindiPath, { out: path.join(dir, "out2") });
+  const hxml = await (await JSZip.loadAsync(fs.readFileSync(hres.docx))).file("word/document.xml").async("string");
+  assert.ok(/w:cs="Mangal"/.test(hxml), "Devanagari runs carry a complex-script font");
+  assert.ok(!hxml.includes("SECTION "), "no section heading for an implicit section");
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log("ok: formatter round-trip test passed");
 })().catch((e) => { console.error(e); process.exit(1); });

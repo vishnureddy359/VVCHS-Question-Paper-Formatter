@@ -25,11 +25,15 @@ const pt2tw = (pt) => Math.round(pt * 20);
 const LOGO = path.join(__dirname, "..", "..", "template", "vvchs_logo.jpg");
 
 // ---------- runs ----------
+const DEVANAGARI = /[\u0900-\u097F]/;
+const CS_FONT = "Mangal"; // complex-script font for Devanagari runs (Word picks w:cs for that script)
+
 function textRuns(runs, base = {}) {
   if (typeof runs === "string") runs = [{ text: runs }];
   return runs.map((r) => new TextRun({
-    text: r.text,
-    font: FONT,
+    text: r.text.replace(/\t/g, " "),
+    font: DEVANAGARI.test(r.text) ? { ascii: FONT, hAnsi: FONT, cs: CS_FONT, eastAsia: FONT } : FONT,
+    sizeComplexScript: base.size || 22,
     size: base.size || 22,
     bold: base.bold || !!r.bold,
     italics: base.italics || !!r.italic,
@@ -196,6 +200,19 @@ function DATA_TABLE(t, maxW = TEXT_W - 360, indent = 360) {
   });
 }
 
+// matching exercise: two borderless columns, aligned with the question text
+function PAIRS(rows) {
+  const colW = 2880;
+  return new Table({
+    width: { size: colW * 2, type: WidthType.DXA }, columnWidths: [colW, colW], layout: TableLayoutType.FIXED,
+    indent: { size: 720, type: WidthType.DXA }, borders: NOBORDERS,
+    rows: rows.map((r) => new TableRow({ cantSplit: true, children: r.map((cell) => new TableCell({
+      width: { size: colW, type: WidthType.DXA }, borders: NOBORDERS, margins: { left: 0, right: 80, top: 20, bottom: 20 },
+      children: [new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 }, children: textRuns(cell) })],
+    })) })),
+  });
+}
+
 // several small tables side by side in one borderless row
 function TABLE_ROW(tables) {
   const n = tables.length;
@@ -314,6 +331,7 @@ function renderEntry(e, section, showInferred) {
       case "image": return [IMAGE_LINE(it.image, !last)];
       case "images": return [IMAGES(it.images, !last)];
       case "table": return [DATA_TABLE(it.table), spacer()];
+      case "pairs": return [PAIRS(it.rows), spacer()];
       case "tables": return [TABLE_ROW(it.tables), spacer()];
       default: return [];
     }
@@ -337,6 +355,7 @@ function renderEntry(e, section, showInferred) {
 }
 
 function sectionHeading(s) {
+  if (s.implicit) return null;
   const rest = (s.rest || "").replace(/\s+/g, " ").trim();
   let title = `SECTION ${s.letter}`;
   if (rest) title += (rest.startsWith("(") ? " " : " – ") + rest;
@@ -347,7 +366,8 @@ function buildBody(model) {
   const body = [];
   for (const e of model.preamble) body.push(...renderEntry(e, { marksExpr: null }, false));
   for (const s of model.sections) {
-    body.push(sectionHeading(s));
+    const heading = sectionHeading(s);
+    if (heading) body.push(heading);
     for (const runs of s.instr) body.push(INSTR(runs));
     // show a per-question mark on stems only where the paper wrote one, or where the section gives no per-question figure
     const showInferred = !(s.marksExpr && s.marksExpr.per);

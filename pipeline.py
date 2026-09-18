@@ -8,6 +8,7 @@ For every .docx or .pdf in 1_Inbox:
   3. route the result:
        no blocking issues  -> <Name>.docx + REVIEW to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
        blocking issues     -> REVIEW to 3_Needs-Fixes, original moved there unchanged
+       PDF whose text cannot be read -> note asking for the Word file to 3_Needs-Fixes, original moved there
        formatter error     -> left in 1_Inbox, reported
        output already in the target folder (a move that stalled last run)
                            -> only the move of the original is redone, reported as "recovered"
@@ -95,6 +96,38 @@ def same_review(existing_id: str, ours: Path, work: Path) -> bool:
     return strip(theirs) == strip(ours.read_text(encoding="utf-8"))
 
 
+def route_unreadable(entry: dict, work: Path, needsfixes: dict, dry_run: bool, result: dict, why: str) -> dict:
+    """A PDF whose text cannot be read goes to 3_Needs-Fixes with a note asking for the Word file."""
+    name = entry["name"]
+    base = Path(name).stem
+    result["status"] = "unreadable"
+    result["name"] = base
+    review = work / "out" / base / f"{base}_REVIEW.md"
+    review.parent.mkdir(parents=True, exist_ok=True)
+    review.write_text(
+        f"# Review — {base}\n"
+        f"Source: {name} · Reviewed {time.strftime('%-d %b %Y')} · Status: NEEDS FIXES — moved to 3_Needs-Fixes\n\n"
+        "## Blocking\n"
+        f"- The text in this PDF cannot be read by software ({why}). **[blocking]**\n"
+        "- Please upload the original Word (.docx) file of this paper to 1_Inbox instead. "
+        "If the paper exists only as a PDF or a scan, tell the coordinator so it can be typed.\n",
+        encoding="utf-8")
+    log(f"UNREADABLE {name}: {why}")
+    if dry_run:
+        result["notes"].append("dry run: nothing uploaded or moved")
+        return result
+    review_name = free_name(needsfixes, base + "_REVIEW", ".md")
+    rid = qp.upload("needsfixes", review, review_name, "text/markdown")
+    needsfixes[review_name] = rid
+    result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
+    moved_name = free_name(needsfixes, base, Path(name).suffix)
+    mv = qp.move(entry["id"], "needsfixes", moved_name if moved_name != name else None)
+    needsfixes[mv["name"]] = mv["id"]
+    result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
+    log(f"  -> 3_Needs-Fixes: {review_name}, original moved as {mv['name']}")
+    return result
+
+
 def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive: dict, dry_run: bool) -> dict:
     """formatted / needsfixes / archive map file name -> id for the current folder contents."""
     formatted_names, needsfixes_names, archive_names = formatted, needsfixes, archive
@@ -106,9 +139,12 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     log(f"downloaded {name} ({src.stat().st_size} bytes)")
     from_pdf = is_pdf(entry)
     if from_pdf:
-        from pdf_to_docx import convert  # imported here so the docx-only path needs no PyMuPDF
+        from pdf_to_docx import convert, UnreadablePdfError  # imported here so the docx-only path needs no PyMuPDF
         converted = src_dir / (Path(name).stem + ".docx")
-        stats = convert(src, converted)
+        try:
+            stats = convert(src, converted)
+        except UnreadablePdfError as e:
+            return route_unreadable(entry, work, needsfixes_names, dry_run, result, str(e))
         log(f"converted PDF -> docx ({stats['pages']} pages, {stats['paragraphs']} paragraphs, {stats['images']} images, {stats['tables']} tables)")
         src = converted
         result["converted_from_pdf"] = stats
@@ -225,6 +261,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "formatted": sum(1 for r in results if r["status"] == "formatted"),
         "needs_fixes": sum(1 for r in results if r["status"] == "needs-fixes"),
         "recovered": sum(1 for r in results if r["status"] == "recovered"),
+        "unreadable": sum(1 for r in results if r["status"] == "unreadable"),
         "errors": sum(1 for r in results if r["status"] == "error"),
         "skipped": others,
         "results": results,
@@ -233,7 +270,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
-        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['recovered']} recovered, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
+        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['unreadable']} unreadable, {summary['recovered']} recovered, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
     return 1 if summary["errors"] else 0
 
 

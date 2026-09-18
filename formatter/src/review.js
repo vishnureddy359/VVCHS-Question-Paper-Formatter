@@ -70,7 +70,8 @@ function review(model, opts = {}) {
     const expected = s.marksExpr ? s.marksExpr.total : null;
     sectionTotals.push({ letter: s.letter, sum, expected, missing, count: groups.length, expectedCount: s.marksExpr && s.marksExpr.count });
     paperSum += sum;
-    if (expected != null && sum !== expected) {
+    if (s.implicit) { /* no heading to compare against; the paper total is checked below */ }
+    else if (expected != null && sum !== expected) {
       const why = missing.length ? ` (${missing.join(", ")} carr${missing.length === 1 ? "ies" : "y"} no mark)` : "";
       if (missing.length && sum < expected) f.marks.push(`Section ${s.letter}: questions with marks sum to ${sum}, heading says ${expected}${why}. Add the missing mark${missing.length > 1 ? "s" : ""} so the section adds up.`);
       else block(f.marks, `Section ${s.letter}: marks sum to ${sum}, heading says ${expected}${why}.`);
@@ -91,9 +92,9 @@ function review(model, opts = {}) {
       if (orWithMark) f.marks.push(`${qLabel(p)}: the mark sits on the OR line instead of the question.`);
     }
   }
-  const okSections = sectionTotals.filter((t) => t.expected != null && t.sum === t.expected);
+  const okSections = sectionTotals.filter((t) => (t.expected != null && t.sum === t.expected) || (model.sections.find((x) => x.letter === t.letter) || {}).implicit);
   if (okSections.length === sectionTotals.length && sectionTotals.length) {
-    const parts = sectionTotals.map((t) => `${t.letter} ${t.sum}`);
+    const parts = sectionTotals.map((t) => `${t.letter || "questions"} ${t.sum}`);
     const line = `Adds up: ${parts.join(" + ")} = ${paperSum}` + (h.marks ? (h.marks === paperSum ? ` — matches the header (${h.marks} marks).` : `, but the header says ${h.marks} marks.`) : ".");
     if (h.marks && h.marks !== paperSum) block(f.marks, line); else f.marks.unshift(line);
   } else if (h.marks && allKnown && paperSum !== h.marks) {
