@@ -77,7 +77,19 @@ def free_name(taken: set[str], base: str, ext: str) -> str:
     return name
 
 
-def process(entry: dict, work: Path, formatted_names: set[str], needsfixes_names: set[str], archive_names: set[str], dry_run: bool) -> dict:
+def same_review(existing_id: str, ours: Path, work: Path) -> bool:
+    """True when the review already in Drive is the one we just generated (date line aside)."""
+    try:
+        theirs = qp.download(existing_id, work / "existing_review.md").read_text(encoding="utf-8", errors="replace")
+    except (qp.BridgeError, OSError):
+        return False
+    strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("Source:")).strip()
+    return strip(theirs) == strip(ours.read_text(encoding="utf-8"))
+
+
+def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive: dict, dry_run: bool) -> dict:
+    """formatted / needsfixes / archive map file name -> id for the current folder contents."""
+    formatted_names, needsfixes_names, archive_names = formatted, needsfixes, archive
     name = entry["name"]
     result = {"file": name, "id": entry["id"], "status": None, "name": None, "uploaded": [], "moved": None, "notes": []}
     src_dir = work / "inbox"
@@ -109,20 +121,25 @@ def process(entry: dict, work: Path, formatted_names: set[str], needsfixes_names
         result["notes"].append("dry run: nothing uploaded or moved")
         return result
 
-    # Guard against a stalled move from an earlier run: the output is already in the target
-    # folder but the original never left the inbox. Retry only the move; never upload twice.
-    if blocking and f"{base}_REVIEW.md" in needsfixes_names:
+    # Guard against a stalled move from an earlier run: our own output is already in the target
+    # folder but the original never left the inbox. Retry only what is missing; never upload twice.
+    # A review note with the same name but different content is someone else's file and is left alone.
+    if blocking and f"{base}_REVIEW.md" in needsfixes_names and same_review(needsfixes_names[f"{base}_REVIEW.md"], review_path, work):
         mv = qp.move(entry["id"], "needsfixes", None)
-        needsfixes_names.add(mv["name"])
+        needsfixes_names[mv["name"]] = mv["id"]
         result["status"] = "recovered"
         result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
         result["notes"].append(f"{base}_REVIEW.md was already in 3_Needs-Fixes; only the stalled move of the original was redone")
         log(f"  -> recovered: review already in 3_Needs-Fixes, original moved as {mv['name']}")
         return result
-    if not blocking and f"{base}.docx" in formatted_names:
+    if not blocking and f"{base}.docx" in formatted_names and (f"{base}_REVIEW.md" not in formatted_names or same_review(formatted_names[f"{base}_REVIEW.md"], review_path, work)):
+        if f"{base}_REVIEW.md" not in formatted_names:
+            rid = qp.upload("formatted", review_path, f"{base}_REVIEW.md", "text/markdown")
+            formatted_names[f"{base}_REVIEW.md"] = rid
+            result["uploaded"].append({"folder": "formatted", "name": f"{base}_REVIEW.md", "id": rid})
         archived = free_name(archive_names, base + "_ORIGINAL", Path(name).suffix)
         mv = qp.move(entry["id"], "archive", archived)
-        archive_names.add(mv["name"])
+        archive_names[mv["name"]] = mv["id"]
         result["status"] = "recovered"
         result["moved"] = {"folder": "archive", "name": mv["name"]}
         result["notes"].append(f"{base}.docx was already in 2_Formatted; only the stalled move of the original was redone")
@@ -132,26 +149,27 @@ def process(entry: dict, work: Path, formatted_names: set[str], needsfixes_names
     if blocking:
         review_name = free_name(needsfixes_names, base + "_REVIEW", ".md")
         rid = qp.upload("needsfixes", review_path, review_name, "text/markdown")
-        needsfixes_names.add(review_name)
+        needsfixes_names[review_name] = rid
         result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
         moved_name = free_name(needsfixes_names, Path(name).stem, Path(name).suffix)
         mv = qp.move(entry["id"], "needsfixes", moved_name if moved_name != name else None)
-        needsfixes_names.add(mv["name"])
+        needsfixes_names[mv["name"]] = mv["id"]
         result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
         log(f"  -> 3_Needs-Fixes: {review_name}, original moved as {mv['name']}")
     else:
-        docx_name = free_name(formatted_names, base, ".docx")
-        stem = docx_name[:-5]
-        review_name = f"{stem}_REVIEW.md"
+        stem, n = base, 2
+        while f"{stem}.docx" in formatted_names or f"{stem}_REVIEW.md" in formatted_names:
+            stem = f"{base}_v{n}"; n += 1
+        docx_name, review_name = f"{stem}.docx", f"{stem}_REVIEW.md"
         did = qp.upload("formatted", docx_path, docx_name, DOCX_MIME)
-        formatted_names.add(docx_name)
+        formatted_names[docx_name] = did
         rid = qp.upload("formatted", review_path, review_name, "text/markdown")
-        formatted_names.add(review_name)
+        formatted_names[review_name] = rid
         result["uploaded"].append({"folder": "formatted", "name": docx_name, "id": did})
         result["uploaded"].append({"folder": "formatted", "name": review_name, "id": rid})
         archived = free_name(archive_names, stem + "_ORIGINAL", Path(name).suffix)
         mv = qp.move(entry["id"], "archive", archived)
-        archive_names.add(mv["name"])
+        archive_names[mv["name"]] = mv["id"]
         result["moved"] = {"folder": "archive", "name": mv["name"]}
         log(f"  -> 2_Formatted: {docx_name} + {review_name}; original archived as {mv['name']}")
     return result
@@ -172,9 +190,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     for o in others:
         log(f"  skipping non-docx: {o}")
 
-    formatted_names = {f["name"] for f in qp.list_files("formatted")} if not args.dry_run else set()
-    needsfixes_names = {f["name"] for f in qp.list_files("needsfixes")} if not args.dry_run else set()
-    archive_names = {f["name"] for f in qp.list_files("archive")} if not args.dry_run else set()
+    listing = lambda key: {f["name"]: f["id"] for f in qp.list_files(key)} if not args.dry_run else {}
+    formatted_names, needsfixes_names, archive_names = listing("formatted"), listing("needsfixes"), listing("archive")
 
     results = []
     for entry in sorted(papers, key=lambda f: f["modified"]):

@@ -41,9 +41,11 @@ and then:
   question): uploads the review to `3_Needs-Fixes` and moves the original there
   unchanged, so the teacher can fix it and re-upload with `_v2`;
 - **formatter error**: leaves the file in the inbox and reports it;
-- **output already in the target folder** while the original is still in the
-  inbox (a move that stalled in an earlier run): redoes only the move and
-  reports the file as recovered, so nothing is uploaded twice.
+- **our own output already in the target folder** while the original is still
+  in the inbox (a move that stalled in an earlier run): uploads whatever is
+  missing, redoes the move and reports the file as recovered. A review note
+  with the same name but different content is someone else's file and is left
+  alone; the pipeline then uses a `_v2` name for its own output.
 
 Names are `<Subject>_<Class>_<ExamCode>_<Session>` per the spec, the class in
 Roman numerals and the exam code taken from the paper's own header. If a name
