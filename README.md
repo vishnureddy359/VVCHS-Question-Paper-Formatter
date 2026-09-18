@@ -40,7 +40,10 @@ and then:
 - **blocking issues** (missing figure, marks that don't add up, incomplete
   question): uploads the review to `3_Needs-Fixes` and moves the original there
   unchanged, so the teacher can fix it and re-upload with `_v2`;
-- **formatter error**: leaves the file in the inbox and reports it.
+- **formatter error**: leaves the file in the inbox and reports it;
+- **output already in the target folder** while the original is still in the
+  inbox (a move that stalled in an earlier run): redoes only the move and
+  reports the file as recovered, so nothing is uploaded twice.
 
 Names are `<Subject>_<Class>_<ExamCode>_<Session>` per the spec, the class in
 Roman numerals and the exam code taken from the paper's own header. If a name

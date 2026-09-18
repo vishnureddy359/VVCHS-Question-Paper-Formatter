@@ -9,6 +9,8 @@ For every .docx in 1_Inbox:
        no blocking issues  -> <Name>.docx + REVIEW to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
        blocking issues     -> REVIEW to 3_Needs-Fixes, original moved there unchanged
        formatter error     -> left in 1_Inbox, reported
+       output already in the target folder (a move that stalled last run)
+                           -> only the move of the original is redone, reported as "recovered"
 
 Files that are not .docx (notes, PDFs, stale review files) are left alone and listed.
 The inbox therefore only ever holds papers that still need processing, which makes
@@ -107,6 +109,26 @@ def process(entry: dict, work: Path, formatted_names: set[str], needsfixes_names
         result["notes"].append("dry run: nothing uploaded or moved")
         return result
 
+    # Guard against a stalled move from an earlier run: the output is already in the target
+    # folder but the original never left the inbox. Retry only the move; never upload twice.
+    if blocking and f"{base}_REVIEW.md" in needsfixes_names:
+        mv = qp.move(entry["id"], "needsfixes", None)
+        needsfixes_names.add(mv["name"])
+        result["status"] = "recovered"
+        result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
+        result["notes"].append(f"{base}_REVIEW.md was already in 3_Needs-Fixes; only the stalled move of the original was redone")
+        log(f"  -> recovered: review already in 3_Needs-Fixes, original moved as {mv['name']}")
+        return result
+    if not blocking and f"{base}.docx" in formatted_names:
+        archived = free_name(archive_names, base + "_ORIGINAL", Path(name).suffix)
+        mv = qp.move(entry["id"], "archive", archived)
+        archive_names.add(mv["name"])
+        result["status"] = "recovered"
+        result["moved"] = {"folder": "archive", "name": mv["name"]}
+        result["notes"].append(f"{base}.docx was already in 2_Formatted; only the stalled move of the original was redone")
+        log(f"  -> recovered: {base}.docx already in 2_Formatted, original archived as {mv['name']}")
+        return result
+
     if blocking:
         review_name = free_name(needsfixes_names, base + "_REVIEW", ".md")
         rid = qp.upload("needsfixes", review_path, review_name, "text/markdown")
@@ -167,6 +189,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "processed": len(results),
         "formatted": sum(1 for r in results if r["status"] == "formatted"),
         "needs_fixes": sum(1 for r in results if r["status"] == "needs-fixes"),
+        "recovered": sum(1 for r in results if r["status"] == "recovered"),
         "errors": sum(1 for r in results if r["status"] == "error"),
         "skipped": others,
         "results": results,
@@ -175,7 +198,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
-        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
+        log(f"done: {summary['formatted']} formatted, {summary['needs_fixes']} need fixes, {summary['recovered']} recovered, {summary['errors']} errors" + (" (dry run)" if args.dry_run else ""))
     return 1 if summary["errors"] else 0
 
 
