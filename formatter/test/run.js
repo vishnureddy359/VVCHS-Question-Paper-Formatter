@@ -1,0 +1,126 @@
+// Round-trip test: build a small teacher-style paper with docx-js, run it through the
+// formatter, and check the model, the review and the output document.
+//
+//   node test/run.js
+
+"use strict";
+
+const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const JSZip = require("jszip");
+const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, AlignmentType } = require("docx");
+const { parseDocx } = require("../src/parse");
+const { buildModel, plain } = require("../src/model");
+const { review } = require("../src/review");
+const { formatPaper } = require("../src/index");
+
+// 1x1 PNG
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+
+const p = (text, o = {}) => new Paragraph({ alignment: o.center ? AlignmentType.CENTER : undefined, children: [new TextRun({ text, bold: o.bold })] });
+
+async function makeFixture() {
+  const doc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VII\t\tSubject: Science (086)\t\tMarks: 10 marks"),
+    p("Date: 01/10/2026\t\tRoll No.:______\t\tTime: 1 hour"),
+    p("General Instructions:"),
+    p("1. All questions are compulsory."),
+    p("Section A (1×4 = 4 Marks)"),
+    p("Q.1. Which gas do plants absorb?"),
+    p("     a) Oxygen        b) Carbon dioxide        c) Nitrogen        d) Helium"),
+    p("Q.2. The sum of angles of a triangle is 180o. The value of 90o + 90o is:                1M"),
+    p("a) 180o          b) 270o            c) 360o             d) 450o"),
+    p("Q.3. Observe the figure and name the shape.     1M"),
+    new Paragraph({ children: [new ImageRun({ type: "png", data: PNG, transformation: { width: 60, height: 40 } })] }),
+    p("Q.4. Which of these is a compound? [1]"),
+    p("(A) Air"), p("(B) Water"), p("(C) Brass"), p("(D) Milk"),
+    p("Section – B (3×2=6Marks)"),
+    p("Q.5. Read the table below and answer:"),
+    new Table({ rows: [
+      new TableRow({ children: [new TableCell({ children: [p("Item")] }), new TableCell({ children: [p("Count")] })] }),
+      new TableRow({ children: [new TableCell({ children: [p("Pens")] }), new TableCell({ children: [p("12")] })] }),
+    ] }),
+    p("(a) How many pens are there?     1M"),
+    p("(b) Explain why the count matters.     2M"),
+    p("Q.6. State two uses of water.                    3M"),
+    p("OR"),
+    p("State two uses of air.                    3M"),
+    p("Q.7. What is friction? Give an example      2M"),
+    p("******************************************"),
+  ] }] });
+  return Packer.toBuffer(doc);
+}
+
+(async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qpfmt-"));
+  const input = path.join(dir, "Science_7th_PT1_2026-2027.docx");
+  fs.writeFileSync(input, await makeFixture());
+
+  // --- parse + model
+  const parsed = await parseDocx(fs.readFileSync(input));
+  const model = buildModel(parsed, path.basename(input));
+  assert.strictEqual(model.header.cls, "VII");
+  assert.strictEqual(model.header.subject, "Science");
+  assert.strictEqual(model.header.subjectCode, "086");
+  assert.strictEqual(model.header.marks, 10);
+  assert.strictEqual(model.header.time, "1 hour");
+  assert.strictEqual(model.header.instructions.length, 1);
+  assert.strictEqual(model.naming.base, "Science_VII_HYE_2026-27");
+  assert.strictEqual(model.naming.conflict, true, "file says PT1, paper says half-yearly");
+  assert.strictEqual(model.sections.length, 2);
+  const [A, B] = model.sections;
+  assert.deepStrictEqual(A.marksExpr && [A.marksExpr.per, A.marksExpr.count, A.marksExpr.total], [1, 4, 4]);
+  const qs = A.entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(qs.map((q) => q.number), [1, 2, 3, 4]);
+  // options split from one line, degree sign fixed, marks read from the line
+  const q1opts = qs[0].items.find((i) => i.kind === "opts");
+  assert.deepStrictEqual(q1opts.items.map(plain), ["a) Oxygen", "b) Carbon dioxide", "c) Nitrogen", "d) Helium"]);
+  assert.strictEqual(qs[1].marks, 1);
+  assert.ok(/180°\. The value of 90° \+ 90°/.test(plain(qs[1].items[0].runs)), "degree signs fixed in the stem");
+  assert.deepStrictEqual(qs[1].items.find((i) => i.kind === "opts").items.map(plain), ["a) 180°", "b) 270°", "c) 360°", "d) 450°"]);
+  // image carried, [1] mark form, one-per-line options merged
+  assert.ok(qs[2].items.some((i) => i.kind === "image"), "Q3 keeps its image");
+  assert.strictEqual(qs[3].marks, 1);
+  assert.strictEqual(qs[3].items.find((i) => i.kind === "opts").items.length, 4, "single-line options merged into one row");
+  // section B: table, sub-part marks summed, OR twin, missing mark inferred from section
+  const bq = B.entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(bq.map((q) => q.number), [5, 6, 7]);
+  assert.ok(bq[0].items.some((i) => i.kind === "table"), "Q5 keeps its table");
+  assert.strictEqual(bq[0].marks, 3, "Q5 = (a) 1 + (b) 2");
+  assert.strictEqual(bq[1].marks, 3);
+  assert.ok(bq[1].items.some((i) => i.kind === "or"));
+  assert.strictEqual(bq[2].marks, 2);
+
+  // --- review
+  const rev = review(model, { date: new Date("2026-09-18T06:00:00Z") });
+  assert.ok(rev.markdown.includes("Reviewed 18 Sep 2026"));
+  assert.ok(rev.markdown.includes("Exam name conflict"), "conflict is reported");
+  assert.ok(/Section B: marks sum to 8, heading says 6/.test(rev.markdown), "section B mismatch is reported: " + rev.markdown);
+  assert.strictEqual(rev.blocking, true);
+  assert.ok(rev.markdown.includes("Q7: no punctuation at the end of the question."));
+  assert.ok(rev.markdown.includes("Degree signs"));
+
+  // --- full CLI path writes both files and the docx has the expected pieces
+  const result = await formatPaper(input, { out: path.join(dir, "out"), date: new Date("2026-09-18T06:00:00Z") });
+  assert.strictEqual(result.name, "Science_VII_HYE_2026-27");
+  assert.ok(fs.existsSync(result.docx) && fs.existsSync(result.review));
+  const zip = await JSZip.loadAsync(fs.readFileSync(result.docx));
+  const xml = await zip.file("word/document.xml").async("string");
+  assert.ok(!/highlightCs/.test(xml), "schema-invalid highlightCs stripped");
+  assert.ok(xml.includes("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR"));
+  assert.ok(xml.includes("SECTION A (1×4 = 4 Marks)"));
+  assert.ok(xml.includes("Subject: SCIENCE (086)"));
+  assert.ok(xml.includes("General Instructions:"));
+  assert.ok(xml.includes("<w:pgBorders"), "page border present");
+  assert.ok(/w:tab[^>]*w:val="right"[^>]*w:pos="10488"/.test(xml), "marks right-tab at the margin");
+  assert.ok((xml.match(/<w:tbl>/g) || []).length >= 2, "figure table and data table present");
+  assert.strictEqual(Object.keys(zip.files).filter((f) => f.startsWith("word/media/") && !zip.files[f].dir).length, 2, "logo + one figure");
+  assert.ok(xml.includes("END"));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log("ok: formatter round-trip test passed");
+})().catch((e) => { console.error(e); process.exit(1); });
