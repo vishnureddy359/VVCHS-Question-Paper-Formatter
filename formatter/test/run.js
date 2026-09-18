@@ -139,6 +139,10 @@ async function makeFixture() {
     p("क)   केवल उनको मीत बनाना"),
     p("प्र. 4 : सही मिलान कीजिए -        (4 M)", { bold: true }),
     p("देश\t\tनिभाना"), p("विश्व\t\tनारा"), p("साथ\t\tभक्ति"), p("बुलंद\t\tशांति"),
+    p("ड)   पाँचवाँ भाग"),
+    p("व्याकरण:", { center: true, bold: true }),
+    p("प्र. 1 : विलोम शब्द लिखिए -        (2 M)", { bold: true }),
+    p("(iii) माता = ______      (iv) बकरा = ______"),
   ] }] });
   const hindiPath = path.join(dir, "Hindi_II_HYE_2026_2027.docx");
   fs.writeFileSync(hindiPath, await Packer.toBuffer(hindiDoc));
@@ -148,16 +152,22 @@ async function makeFixture() {
   assert.strictEqual(hm.header.marks, 15);
   assert.strictEqual(hm.header.time, "3.00 HRS");
   assert.strictEqual(hm.naming.base, "Hindi_II_HYE_2026-27", "HALF YEAR -> HYE, 2026_2027 -> 2026-27");
-  assert.strictEqual(hm.sections.length, 1);
-  assert.ok(hm.sections[0].implicit, "a paper without section headings gets one implicit section");
+  assert.ok(hm.sections[0].implicit, "a paper without section headings gets an implicit section");
   const hq = hm.sections[0].entries.filter((e) => e.kind === "question");
   assert.deepStrictEqual(hq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 1], [4, 4]]);
+  assert.strictEqual(hm.sections.length, 2, "a centred title followed by Q1 again opens a second part");
+  assert.strictEqual(plain(hm.sections[1].title), "व्याकरण:");
+  assert.strictEqual(hq[3].items.filter((i) => i.kind === "sub").pop().label, "(ड)", "ड) accepted as a sub-part label");
+  const part2 = hm.sections[1].entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(part2.map((q) => [q.number, q.marks]), [[1, 2]]);
+  assert.deepStrictEqual(part2[0].items.find((i) => i.kind === "opts").items.map(plain), ["(iii) माता = ______", "(iv) बकरा = ______"], "a row starting at (iii) is an option row");
   assert.strictEqual(hq[0].items.find((i) => i.kind === "sub").label, "(क)");
   assert.deepStrictEqual(hq[0].items.find((i) => i.kind === "opts").items.map(plain), ["(i) छठी", "(ii) पाँचवी", "(iii) चौथी"]);
   const pairs = hq[3].items.find((i) => i.kind === "pairs");
   assert.ok(pairs && pairs.rows.length === 4 && plain(pairs.rows[0][0]) === "देश" && plain(pairs.rows[0][1]) === "निभाना", "matching pairs kept as columns");
   const hrev = review(hm, { date: new Date("2026-09-18T06:00:00Z") });
-  assert.ok(hrev.markdown.includes("Adds up: questions 15 = 15 — matches the header (15 marks)."), hrev.markdown);
+  assert.ok(hrev.markdown.includes("Adds up: questions 15 + questions 2 = 17, but the header says 15 marks."), hrev.markdown);
+  assert.ok(!hrev.markdown.includes("Duplicate question number"), "numbering restart after a part title is not a duplicate");
   const hres = await formatPaper(hindiPath, { out: path.join(dir, "out2") });
   const hxml = await (await JSZip.loadAsync(fs.readFileSync(hres.docx))).file("word/document.xml").async("string");
   assert.ok(/w:cs="Mangal"/.test(hxml), "Devanagari runs carry a complex-script font");

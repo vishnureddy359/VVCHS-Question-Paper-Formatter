@@ -170,12 +170,17 @@ function IMAGE_LINE(img, keepNext = true) {
 }
 
 // ---------- data tables ----------
-function cellParas(cell, center) {
-  const paras = cell.paragraphs.filter((p) => p.runs.length).map((p) => new Paragraph({
-    alignment: center ? AlignmentType.CENTER : AlignmentType.LEFT,
-    spacing: { line: 240, lineRule: "auto", before: 0, after: 0 },
-    children: textRuns(p.runs.map((r) => Object.assign({}, r, { text: r.text.replace(/￼/g, "") }))),
-  }));
+function cellParas(cell, center, cellW = 4000) {
+  const maxImgPt = Math.max(40, cellW / 20 - 12);
+  const paras = cell.paragraphs.filter((p) => p.runs.length || (p.images && p.images.length)).map((p) => {
+    const children = textRuns(p.runs.map((r) => Object.assign({}, r, { text: r.text.replace(/\uFFFC/g, "") })));
+    for (const img of p.images || []) { const { w, h } = imgSize(img, maxImgPt); children.push(IMG(img, w, h)); }
+    return new Paragraph({
+      alignment: center || (p.images && p.images.length) ? AlignmentType.CENTER : AlignmentType.LEFT,
+      spacing: { line: 240, lineRule: "auto", before: 0, after: 0 },
+      children,
+    });
+  });
   return paras.length ? paras : [new Paragraph({ spacing: { before: 0, after: 0 }, children: [] })];
 }
 
@@ -191,7 +196,7 @@ function DATA_TABLE(t, maxW = TEXT_W - 360, indent = 360) {
     borders: t.bordered ? BORDERS : NOBORDERS,
     margins: { left: 80, right: 80, top: 20, bottom: 20 },
     verticalAlign: VerticalAlign.CENTER,
-    children: cellParas(c, allShort),
+    children: cellParas(c, allShort, cols[ci] || cols[0]),
   })) }));
   return new Table({
     width: { size: sum, type: WidthType.DXA }, columnWidths: cols, layout: TableLayoutType.FIXED,
@@ -355,7 +360,7 @@ function renderEntry(e, section, showInferred) {
 }
 
 function sectionHeading(s) {
-  if (s.implicit) return null;
+  if (s.implicit) return s.title ? HEADING(plain(s.title)) : null;
   const rest = (s.rest || "").replace(/\s+/g, " ").trim();
   let title = `SECTION ${s.letter}`;
   if (rest) title += (rest.startsWith("(") ? " " : " – ") + rest;
