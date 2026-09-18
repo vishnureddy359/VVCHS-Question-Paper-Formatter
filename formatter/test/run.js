@@ -38,7 +38,8 @@ async function makeFixture() {
     new Paragraph({ children: [new ImageRun({ type: "png", data: PNG, transformation: { width: 60, height: 40 } })] }),
     p("Q.4. Which of these is a compound? [1]"),
     p("(A) Air"), p("(B) Water"), p("(C) Brass"), p("(D) Milk"),
-    p("Section – B (3×2=6Marks)"),
+    p("Section – B"),
+    p("Section B consists of short answers.        (3×2=6Marks)"),
     p("Q.5. Read the table below and answer:"),
     new Table({ rows: [
       new TableRow({ children: [new TableCell({ children: [p("Item")] }), new TableCell({ children: [p("Count")] })] }),
@@ -74,6 +75,7 @@ async function makeFixture() {
   assert.strictEqual(model.sections.length, 2);
   const [A, B] = model.sections;
   assert.deepStrictEqual(A.marksExpr && [A.marksExpr.per, A.marksExpr.count, A.marksExpr.total], [1, 4, 4]);
+  assert.deepStrictEqual(B.marksExpr && [B.marksExpr.per, B.marksExpr.count, B.marksExpr.total], [3, 2, 6], "section marks read from the instruction line");
   const qs = A.entries.filter((e) => e.kind === "question");
   assert.deepStrictEqual(qs.map((q) => q.number), [1, 2, 3, 4]);
   // options split from one line, degree sign fixed, marks read from the line

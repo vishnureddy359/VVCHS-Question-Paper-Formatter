@@ -409,18 +409,10 @@ class Builder {
     // closing END line
     if (RE.endLine.test(text) && /[*=_\-~]{5,}|end/i.test(text)) return;
 
-    // trailing mark "1M", or a per-part expression "(1x5 M)" on a question line
+    // trailing mark "1M"
     let marks = null;
     ({ runs, marks } = extractMark(runs));
     text = plain(runs);
-    if (marks == null) {
-      const pr = RE.marksProduct.exec(text);
-      if (pr && pr.index + pr[0].length >= text.length - 1) {
-        marks = pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]);
-        runs = normalizeRuns(sliceRuns(runs, 0, pr.index));
-        text = plain(runs);
-      }
-    }
 
     // OR line (optionally carrying a mark)
     const orm = RE.orLine.exec(text);
@@ -455,6 +447,16 @@ class Builder {
       if (a) { alt = a[1]; cut = a[0].length; }
     }
     if (number != null && number > 0 && number < 100) {
+      // a per-part expression "(1x5 M)" / "(1x5=5 M)" at the end of a question line is that question's marks
+      // (on a section instruction line the same expression is the section total and must stay in the text)
+      if (marks == null) {
+        const pr = RE.marksProduct.exec(text);
+        if (pr && pr.index + pr[0].length >= text.length - 1) {
+          marks = pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]);
+          runs = normalizeRuns(sliceRuns(runs, 0, pr.index));
+          text = plain(runs);
+        }
+      }
       const rest = stripPrefix(runs, cut);
       const restText = plain(rest);
       // a numbered line whose remainder is just "(A)" alternative marker
