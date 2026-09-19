@@ -205,8 +205,8 @@ async function makeFixture() {
   assert.deepStrictEqual(sq[2].items.filter((i) => i.kind === "sub").map((i) => i.marks), [2, 3]);
   assert.deepStrictEqual(sq[3].items.find((i) => i.kind === "opts").items.map(plain).slice(-1), ["e) Brahmaputra"], "five-label rows a)–e)");
   const srev = review(sm, { date: new Date("2026-09-19T06:00:00Z") });
-  assert.strictEqual(srev.blocking, true);
-  assert.ok(srev.markdown.includes("Q4: asks for work on a map but no map is in the file"), srev.markdown);
+  assert.strictEqual(srev.blocking, false, "a map question without a map is a note, not a blocker (maps are printed separately)");
+  assert.ok(srev.markdown.includes("Q4: map question — no map in the file; the outline map is printed separately."), srev.markdown);
   assert.ok(srev.markdown.includes("Adds up: A 10 + F 10 = 20"), srev.markdown);
   assert.ok(!srev.markdown.includes("Duplicate question number"), srev.markdown);
 

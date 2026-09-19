@@ -195,7 +195,11 @@ function review(model, opts = {}) {
       }
       // figures
       const wantsFigure = FIGURE_WORDS.test(at) && !DRAW_WORDS.test(at.slice(Math.max(0, at.search(FIGURE_WORDS) - 40), at.search(FIGURE_WORDS) + 40));
-      if (wantsFigure && !hasFigure(e)) block(f.figures, /\bmap\b/i.test(at) ? `${label}: asks for work on a map but no map is in the file — attach a printable outline map.` : `${label}: refers to a figure/diagram but none is in the file.`);
+      if (wantsFigure && !hasFigure(e)) {
+        // outline maps are printed and handed out separately, so a map question without a map is not a blocker
+        if (/\bmap\b/i.test(at)) f.figures.push(`${label}: map question — no map in the file; the outline map is printed separately.`);
+        else block(f.figures, `${label}: refers to a figure/diagram but none is in the file.`);
+      }
     }
   }
 
