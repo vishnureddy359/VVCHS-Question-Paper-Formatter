@@ -7,7 +7,7 @@
 
 const { plain } = require("./model");
 
-const FIGURE_WORDS = /\b(figure|fig\.|diagram|adjoining|picture|image|graph shown|in the given figure|the given diagram)\b/i;
+const FIGURE_WORDS = /\b(figure|fig\.|diagram|adjoining|picture|image|graph shown|in the given figure|the given diagram|on the (?:given |outline |political |physical )?map|outline map|in the map|map of india|map of the world)\b/i;
 const DRAW_WORDS = /\b(draw|construct|sketch|plot|represent .* on)\b/i;
 
 function qLabel(e) {
@@ -195,7 +195,11 @@ function review(model, opts = {}) {
       }
       // figures
       const wantsFigure = FIGURE_WORDS.test(at) && !DRAW_WORDS.test(at.slice(Math.max(0, at.search(FIGURE_WORDS) - 40), at.search(FIGURE_WORDS) + 40));
-      if (wantsFigure && !hasFigure(e)) block(f.figures, `${label}: refers to a figure/diagram but none is in the file.`);
+      if (wantsFigure && !hasFigure(e)) {
+        // outline maps are printed and handed out separately, so a map question without a map is not a blocker
+        if (/\bmap\b/i.test(at)) f.figures.push(`${label}: map question — no map in the file; the outline map is printed separately.`);
+        else block(f.figures, `${label}: refers to a figure/diagram but none is in the file.`);
+      }
     }
   }
 
