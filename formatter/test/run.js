@@ -173,6 +173,43 @@ async function makeFixture() {
   assert.ok(/w:cs="Mangal"/.test(hxml), "Devanagari runs carry a complex-script font");
   assert.ok(!hxml.includes("SECTION "), "no section heading for an implicit section");
 
+  // --- a "Q.1." paper with numbered sub-parts, a numeric answer-key row, Section F and a map question
+  const sstDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: III\t\tSubject: SST (SOCIAL STUDIES)\t\tMarks: 20"),
+    p("Date: 14/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section A (10 marks)", { center: true, bold: true }),
+    p("Q.1. Match the following:\t\t(1 x 5 = 5 m)"),
+    p("1)a,b,c,d,e          2)b,c,a,d,e          3)c,d,b,e,a"),
+    p("Q.2. Very Short Answer Type Question [Any 5]:\t\t(1×5=5 m)"),
+    p("1) Name any two rain fed rivers."),
+    p("2) What is a sledge?"),
+    p("Section F (10 marks)", { center: true, bold: true }),
+    p("Q.3. Read the passage and answer the following questions:\t\t(5 m)"),
+    p("1) Which is the largest river island in the world?\t\t2m"),
+    p("2) How is this island formed?\t\t3m"),
+    p("Q.4. Map-Based Question:\t\t(5 m)"),
+    p("On the map of India, mark the following rivers:"),
+    p("a) Narmada          b) Tapti          c) Kaveri          d) Ganga          e) Brahmaputra"),
+  ] }] });
+  const sstPath = path.join(dir, "SST_3_HYE_2026-27.docx");
+  fs.writeFileSync(sstPath, await Packer.toBuffer(sstDoc));
+  const sm = buildModel(await parseDocx(fs.readFileSync(sstPath)), path.basename(sstPath));
+  assert.strictEqual(sm.naming.base, "SocialScience_III_HYE_2026-27");
+  assert.deepStrictEqual(sm.sections.map((x) => x.letter), ["A", "F"], "sections beyond E are recognised");
+  const sq = sm.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(sq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 5], [4, 5]], "1) lines are sub-parts, not questions");
+  assert.deepStrictEqual(sq[0].items.find((i) => i.kind === "opts").items.map(plain), ["1)a,b,c,d,e", "2)b,c,a,d,e", "3)c,d,b,e,a"], "numeric answer-key row");
+  assert.deepStrictEqual(sq[1].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(1)", "(2)"]);
+  assert.deepStrictEqual(sq[2].items.filter((i) => i.kind === "sub").map((i) => i.marks), [2, 3]);
+  assert.deepStrictEqual(sq[3].items.find((i) => i.kind === "opts").items.map(plain).slice(-1), ["e) Brahmaputra"], "five-label rows a)–e)");
+  const srev = review(sm, { date: new Date("2026-09-19T06:00:00Z") });
+  assert.strictEqual(srev.blocking, true);
+  assert.ok(srev.markdown.includes("Q4: asks for work on a map but no map is in the file"), srev.markdown);
+  assert.ok(srev.markdown.includes("Adds up: A 10 + F 10 = 20"), srev.markdown);
+  assert.ok(!srev.markdown.includes("Duplicate question number"), srev.markdown);
+
   // --- garbled Devanagari (a PDF converted back to Word) is detected; real Hindi is not
   const real = garbledDevanagari("देबू कौन सी कक्षा में पढ़ता था ? नैना की दादी के न आने का क्या कारण था ?");
   assert.ok(real.marks > 10 && real.ratio < 0.1, JSON.stringify(real));

@@ -102,7 +102,7 @@ const RE = {
   roll: /\broll\s*no/i,
   genInstr: /^general\s+instructions?\s*[:\-]?\s*$/i,
   genInstrInline: /^general\s+instructions?\s*[:\-]?\s*(.+)$/i,
-  section: /^section\s*[-–—:]?\s*([a-e])\b\s*[-–—:.]?\s*(.*)$/i,
+  section: /^section\s*[-–—:]?\s*([a-h])\b\s*[-–—:.]?\s*(.*)$/i,
   qDot: /^(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*/i,
   qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
   qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
@@ -110,10 +110,12 @@ const RE = {
   mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
   orTrail: /\s+OR\s*$/,
-  optLabel: /(?<=^|\s)\(?([a-dA-D])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
+  optLabel: /(?<=^|\s)\(?([a-eA-E])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
+  optNum: /(?<=^|\s)\(?([1-9])\)\s*/g,
   optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
   subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङडचछजझ])\)\s*/i,
   subDot: /^([a-h])\.\s+(?=[A-Za-z(])/,
+  subNum: /^\(?(\d{1,2})\)\s*/,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
   direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q)/i,
   titleLine: /^(assertion|reason|case[\s-]*study|section|passage|multiple[\s-]*choice|mcq)/i,
@@ -295,7 +297,7 @@ function optionItems(text) {
   if (!items.length || items[0].labelStart !== 0) return null;
   // labels should be in order a,b,c,d (case-insensitive) to count as an option row
   const seq = items.map((it) => it.label.toLowerCase());
-  const expected = "abcd".slice(0, seq.length).split("");
+  const expected = "abcde".slice(0, seq.length).split("");
   const startsAtA = seq[0] === "a";
   const ordered = seq.every((l, i) => l === expected[i]) || (!startsAtA && seq.every((l, i) => l.charCodeAt(0) === seq[0].charCodeAt(0) + i));
   if (!ordered) return null;
@@ -314,9 +316,19 @@ function romanItems(text) {
   return items;
 }
 
-function splitOptions(runs) {
+function numItems(text) {
+  const items = [];
+  RE.optNum.lastIndex = 0;
+  let m;
+  while ((m = RE.optNum.exec(text))) items.push({ label: m[1], labelStart: m.index, textStart: m.index + m[0].length });
+  if (items.length < 2 || items[0].labelStart !== 0) return null;
+  if (!items.every((it, k) => Number(it.label) === k + 1)) return null;
+  return items;
+}
+
+function splitOptions(runs, allowNum) {
   const text = plain(runs);
-  const items = optionItems(text) || romanItems(text);
+  const items = optionItems(text) || romanItems(text) || (allowNum ? numItems(text) : null);
   if (!items || items.length < 2) return null;
   return items.map((it, i) => {
     const end = i + 1 < items.length ? items[i + 1].labelStart : text.length;
@@ -341,6 +353,7 @@ class Builder {
     this.sections = [];
     this.section = null;
     this.entry = null; // current question or note
+    this.qDotStyle = false; // questions numbered "Q.1." — then a bare "1)" line is a sub-part
     this.preamble = []; // entries before the first section
     this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0 };
     this.lastQuestionNumber = 0;
@@ -438,9 +451,11 @@ class Builder {
     // question start: "Q.1.", "1.", "16.A) (a)", "10.(A)", or Word numbering at level 0
     let qm = RE.qDot.exec(text);
     let number = null, alt = null, cut = 0;
-    if (qm) { number = Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))); cut = qm[0].length; }
-    else if ((qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
-    else if ((qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
+    // in a paper that numbers its questions "Q.1." a bare "1)" line is a numbered sub-part, not a question
+    const numSub = this.qDotStyle && RE.subNum.test(text);
+    if (qm) { number = Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))); cut = qm[0].length; this.qDotStyle = true; }
+    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
+    else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
     else if (numLabel && line.num.fmt === "decimal" && line.num.ilvl === 0 && /^\d+/.test(numLabel)) {
       number = Number(/^\d+/.exec(numLabel)[0]);
       // a numbered paragraph whose text is only an OR alternative label
@@ -487,7 +502,7 @@ class Builder {
     }
 
     // option row(s): "a) .. b) .. c) .. d) .."  or "(A) .. (B) .."
-    const opts = splitOptions(runs);
+    const opts = splitOptions(runs, this.qDotStyle);
     if (opts && opts.length >= 2 && this.entry) {
       const inMcq = this.mcqContext();
       const allShort = opts.every((o) => plain(o).length <= 45);
@@ -495,7 +510,7 @@ class Builder {
     }
 
     // sub-part "(a) ..." / "i) ..." / "a. ..." (single label at line start)
-    const sm = RE.subLabel.exec(text) || RE.subDot.exec(text);
+    const sm = RE.subLabel.exec(text) || RE.subDot.exec(text) || (this.qDotStyle ? RE.subNum.exec(text) : null);
     // "(B) …" right after OR in a question labelled (A) is the alternative, not a sub-part
     if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^\(?B\)/.test(text)
         && this.entry.items.length && this.entry.items[this.entry.items.length - 1].kind === "or") {
