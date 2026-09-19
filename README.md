@@ -12,9 +12,10 @@ talk to that bridge, never to Drive directly.
 | Path | Purpose |
 | --- | --- |
 | `qp.py` | Command-line client for the bridge: `list`, `download`, `upload`, `move`. |
-| `formatter/` | Node package that turns one teacher `.docx` into the template layout plus a `_REVIEW.md` note. See `formatter/README.md`. |
+| `formatter/` | Node package that turns one teacher `.docx` into the template layout plus a `_REVIEW.docx` note (Markdown on disk, Word in Drive). See `formatter/README.md`. |
 | `pipeline.py` | Runs the whole inbox through the formatter and routes results into the Drive folders. |
 | `pdf_to_docx.py` | Converts a PDF submission to a plain `.docx` (text rows, images, tables) so the formatter can read it. |
+| `review_docx.py` | Turns a review note (Markdown) into a small Word file, because Drive has no viewer for `.md`. |
 | `template/` | Local copies of the `_Template` assets: format spec, reference builder, logo. |
 
 ## Setup
@@ -38,7 +39,7 @@ For every `.docx` or `.pdf` in `1_Inbox` the pipeline downloads it (a PDF is
 first converted to Word with `pdf_to_docx.py`, and the review note says so),
 runs the formatter and then:
 
-- **no blocking issues**: uploads `<Name>.docx` and `<Name>_REVIEW.md` to
+- **no blocking issues**: uploads `<Name>.docx` and `<Name>_REVIEW.docx` to
   `2_Formatted` and moves the original to `4_Archive` as `<Name>_ORIGINAL.docx`;
 - **blocking issues** (missing figure, marks that don't add up, incomplete
   question): uploads the review to `3_Needs-Fixes` and moves the original there

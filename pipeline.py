@@ -6,8 +6,8 @@ For every .docx or .pdf in 1_Inbox:
   1. download it through the bridge (qp.py); a PDF is first converted to .docx with pdf_to_docx.py
   2. run the formatter (formatter/src/index.js) -> <Name>.docx + <Name>_REVIEW.md
   3. route the result:
-       no blocking issues  -> <Name>.docx + REVIEW to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
-       blocking issues     -> REVIEW to 3_Needs-Fixes, original moved there unchanged
+       no blocking issues  -> <Name>.docx + <Name>_REVIEW.docx to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
+       blocking issues     -> <Name>_REVIEW.docx to 3_Needs-Fixes, original moved there unchanged
        PDF whose text cannot be read -> note asking for the Word file to 3_Needs-Fixes, original moved there
        formatter error     -> left in 1_Inbox, reported
        output already in the target folder (a move that stalled last run)
@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 
 import qp
+from review_docx import md_to_docx
 
 ROOT = Path(__file__).resolve().parent
 FORMATTER = ROOT / "formatter" / "src" / "index.js"
@@ -86,14 +87,28 @@ def free_name(taken: set[str], base: str, ext: str) -> str:
     return name
 
 
-def same_review(existing_id: str, ours: Path, work: Path) -> bool:
+def docx_text(path: Path) -> str:
+    """Plain text of a .docx (paragraph per line), for comparing review notes."""
+    import re, zipfile
+    xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8", "replace")
+    paras = re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
+    return "\n".join("".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)) for p in paras)
+
+
+def review_docx_for(review_md: Path) -> Path:
+    out = review_md.with_suffix(".docx")
+    md_to_docx(review_md, out)
+    return out
+
+
+def same_review(existing_id: str, ours_md: Path, work: Path) -> bool:
     """True when the review already in Drive is the one we just generated (date line aside)."""
     try:
-        theirs = qp.download(existing_id, work / "existing_review.md").read_text(encoding="utf-8", errors="replace")
-    except (qp.BridgeError, OSError):
+        theirs = docx_text(qp.download(existing_id, work / "existing_review.docx"))
+    except (qp.BridgeError, OSError, KeyError, ValueError):
         return False
-    strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("Source:")).strip()
-    return strip(theirs) == strip(ours.read_text(encoding="utf-8"))
+    strip = lambda t: "\n".join(l.strip() for l in t.splitlines() if l.strip() and not l.startswith("Source:")).strip()
+    return strip(theirs) == strip(docx_text(review_docx_for(ours_md)))
 
 
 def route_unreadable(entry: dict, work: Path, needsfixes: dict, dry_run: bool, result: dict, why: str) -> dict:
@@ -116,8 +131,8 @@ def route_unreadable(entry: dict, work: Path, needsfixes: dict, dry_run: bool, r
     if dry_run:
         result["notes"].append("dry run: nothing uploaded or moved")
         return result
-    review_name = free_name(needsfixes, base + "_REVIEW", ".md")
-    rid = qp.upload("needsfixes", review, review_name, "text/markdown")
+    review_name = free_name(needsfixes, base + "_REVIEW", ".docx")
+    rid = qp.upload("needsfixes", review_docx_for(review), review_name, DOCX_MIME)
     needsfixes[review_name] = rid
     result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
     moved_name = free_name(needsfixes, base, Path(name).suffix)
@@ -178,19 +193,19 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     # Guard against a stalled move from an earlier run: our own output is already in the target
     # folder but the original never left the inbox. Retry only what is missing; never upload twice.
     # A review note with the same name but different content is someone else's file and is left alone.
-    if blocking and f"{base}_REVIEW.md" in needsfixes_names and same_review(needsfixes_names[f"{base}_REVIEW.md"], review_path, work):
+    if blocking and f"{base}_REVIEW.docx" in needsfixes_names and same_review(needsfixes_names[f"{base}_REVIEW.docx"], review_path, work):
         mv = qp.move(entry["id"], "needsfixes", None)
         needsfixes_names[mv["name"]] = mv["id"]
         result["status"] = "recovered"
         result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
-        result["notes"].append(f"{base}_REVIEW.md was already in 3_Needs-Fixes; only the stalled move of the original was redone")
+        result["notes"].append(f"{base}_REVIEW.docx was already in 3_Needs-Fixes; only the stalled move of the original was redone")
         log(f"  -> recovered: review already in 3_Needs-Fixes, original moved as {mv['name']}")
         return result
-    if not blocking and f"{base}.docx" in formatted_names and (f"{base}_REVIEW.md" not in formatted_names or same_review(formatted_names[f"{base}_REVIEW.md"], review_path, work)):
-        if f"{base}_REVIEW.md" not in formatted_names:
-            rid = qp.upload("formatted", review_path, f"{base}_REVIEW.md", "text/markdown")
-            formatted_names[f"{base}_REVIEW.md"] = rid
-            result["uploaded"].append({"folder": "formatted", "name": f"{base}_REVIEW.md", "id": rid})
+    if not blocking and f"{base}.docx" in formatted_names and (f"{base}_REVIEW.docx" not in formatted_names or same_review(formatted_names[f"{base}_REVIEW.docx"], review_path, work)):
+        if f"{base}_REVIEW.docx" not in formatted_names:
+            rid = qp.upload("formatted", review_docx_for(review_path), f"{base}_REVIEW.docx", DOCX_MIME)
+            formatted_names[f"{base}_REVIEW.docx"] = rid
+            result["uploaded"].append({"folder": "formatted", "name": f"{base}_REVIEW.docx", "id": rid})
         archived = free_name(archive_names, base + "_ORIGINAL", Path(name).suffix)
         mv = qp.move(entry["id"], "archive", archived)
         archive_names[mv["name"]] = mv["id"]
@@ -201,8 +216,8 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
         return result
 
     if blocking:
-        review_name = free_name(needsfixes_names, base + "_REVIEW", ".md")
-        rid = qp.upload("needsfixes", review_path, review_name, "text/markdown")
+        review_name = free_name(needsfixes_names, base + "_REVIEW", ".docx")
+        rid = qp.upload("needsfixes", review_docx_for(review_path), review_name, DOCX_MIME)
         needsfixes_names[review_name] = rid
         result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
         moved_name = free_name(needsfixes_names, Path(name).stem, Path(name).suffix)
@@ -212,12 +227,12 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
         log(f"  -> 3_Needs-Fixes: {review_name}, original moved as {mv['name']}")
     else:
         stem, n = base, 2
-        while f"{stem}.docx" in formatted_names or f"{stem}_REVIEW.md" in formatted_names:
+        while f"{stem}.docx" in formatted_names or f"{stem}_REVIEW.docx" in formatted_names:
             stem = f"{base}_v{n}"; n += 1
-        docx_name, review_name = f"{stem}.docx", f"{stem}_REVIEW.md"
+        docx_name, review_name = f"{stem}.docx", f"{stem}_REVIEW.docx"
         did = qp.upload("formatted", docx_path, docx_name, DOCX_MIME)
         formatted_names[docx_name] = did
-        rid = qp.upload("formatted", review_path, review_name, "text/markdown")
+        rid = qp.upload("formatted", review_docx_for(review_path), review_name, DOCX_MIME)
         formatted_names[review_name] = rid
         result["uploaded"].append({"folder": "formatted", "name": docx_name, "id": did})
         result["uploaded"].append({"folder": "formatted", "name": review_name, "id": rid})
