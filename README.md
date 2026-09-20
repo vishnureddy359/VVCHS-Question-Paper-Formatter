@@ -17,6 +17,7 @@ talk to that bridge, never to Drive directly.
 | `pdf_to_docx.py` | Converts a PDF submission to a plain `.docx` (text rows, images, tables) so the formatter can read it. |
 | `review_docx.py` | Turns a review note (Markdown) into a small Word file, because Drive has no viewer for `.md`. |
 | `template/` | Local copies of the `_Template` assets: format spec, reference builder, logo. |
+| `bridge/` | Source of the Apps Script bridge (`Code.gs`) and how to deploy it. |
 
 ## Setup
 
@@ -33,6 +34,7 @@ export QP_BRIDGE_TOKEN=<the TOKEN script property>
 python3 pipeline.py run --dry-run    # download + format only; nothing changes in Drive
 python3 pipeline.py run              # the real thing
 python3 pipeline.py run --only Maths_8th_PT1_2026-2027.docx
+python3 pipeline.py run --class-folders    # file into 2_Formatted/Class-VII etc. (needs the class-aware bridge)
 ```
 
 For every `.docx` or `.pdf` in `1_Inbox` the pipeline downloads it (a PDF is
@@ -53,6 +55,11 @@ runs the formatter and then:
   missing, redoes the move and reports the file as recovered. A review note
   with the same name but different content is someone else's file and is left
   alone; the pipeline then uses a `_v2` name for its own output.
+
+With `--class-folders` every output goes into a `Class-<n>` sub-folder of
+`2_Formatted`, `3_Needs-Fixes` and `4_Archive` (created on first use), so a
+coordinator can open one class at a time. The inbox stays flat. This needs the
+bridge in `bridge/Code.gs`; see `bridge/README.md` for deploying it.
 
 Names are `<Subject>_<Class>_<ExamCode>_<Session>` per the spec, the class in
 Roman numerals and the exam code taken from the paper's own header. If a name

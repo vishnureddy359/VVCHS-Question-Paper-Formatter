@@ -48,6 +48,26 @@ from pathlib import Path
 
 FOLDERS = ("inbox", "formatted", "needsfixes", "archive", "template")
 WRITABLE = ("inbox", "formatted", "needsfixes", "archive")
+CLASS_AWARE = ("formatted", "needsfixes", "archive")  # may carry a "/Class-<Roman>" sub-folder
+ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII")
+
+
+def folder_key(spec: str) -> str:
+    """Validate "formatted" or "formatted/Class-VII" and return the folder key."""
+    key, _, sub = spec.partition("/")
+    if key not in FOLDERS:
+        raise BridgeError(f"unknown folder '{spec}' (choose one of {', '.join(FOLDERS)})")
+    if sub:
+        if key not in CLASS_AWARE:
+            raise BridgeError(f"folder '{key}' has no sub-folders")
+        if not (sub.startswith("Class-") and sub[6:] in ROMAN):
+            raise BridgeError(f"sub-folder must be Class-<Roman numeral>, got '{sub}'")
+    return key
+
+
+def class_folder(key: str, cls: str | None) -> str:
+    """'formatted' + 'VII' -> 'formatted/Class-VII'; falls back to the flat folder for unknown classes."""
+    return f"{key}/Class-{cls}" if key in CLASS_AWARE and cls in ROMAN else key
 TIMEOUT_SECONDS = 120
 
 
@@ -142,7 +162,7 @@ def download(file_id: str, out: Path | None = None) -> Path:
 
 
 def upload(folder: str, path: Path, name: str | None = None, mime: str | None = None) -> str:
-    if folder not in WRITABLE:
+    if folder_key(folder) not in WRITABLE:
         raise BridgeError(f"folder '{folder}' is not writable (choose one of {', '.join(WRITABLE)})")
     name = name or path.name
     mime = mime or mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -151,7 +171,7 @@ def upload(folder: str, path: Path, name: str | None = None, mime: str | None = 
 
 
 def move(file_id: str, folder: str, name: str | None = None) -> dict:
-    if folder not in WRITABLE:
+    if folder_key(folder) not in WRITABLE:
         raise BridgeError(f"folder '{folder}' is not writable (choose one of {', '.join(WRITABLE)})")
     fields = {"id": file_id, "folder": folder}
     if name:
@@ -174,31 +194,40 @@ def _print_table(files: list[dict]) -> None:
         print("(empty)")
         return
     width = max(len(f["name"]) for f in files)
+    subs = any(f.get("sub") for f in files)
     for f in sorted(files, key=lambda f: f["modified"], reverse=True):
-        print(f"{f['id']}  {f['modified'][:19]}  {_fmt_size(f['size']):>9}  {f['name']:<{width}}")
+        where = f"  {f.get('sub') or '':<10}" if subs else ""
+        print(f"{f['id']}  {f['modified'][:19]}  {_fmt_size(f['size']):>9}{where}  {f['name']:<{width}}")
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="qp.py", description="VVCHS Question Paper bridge client")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("list", help="list files in a pipeline folder")
-    s.add_argument("folder", choices=FOLDERS)
+    def folder_arg(spec: str) -> str:
+        try:
+            folder_key(spec)
+        except BridgeError as e:
+            raise argparse.ArgumentTypeError(str(e))
+        return spec
+
+    s = sub.add_parser("list", help="list files in a pipeline folder (or folder/Class-VII)")
+    s.add_argument("folder", type=folder_arg)
     s.add_argument("--json", action="store_true", help="print raw JSON")
 
     s = sub.add_parser("download", help="download a file by id")
     s.add_argument("id")
     s.add_argument("--out", type=Path, help="destination file or directory (default: original name in cwd)")
 
-    s = sub.add_parser("upload", help="upload a local file into a writable folder")
-    s.add_argument("folder", choices=WRITABLE)
+    s = sub.add_parser("upload", help="upload a local file into a writable folder (or folder/Class-VII)")
+    s.add_argument("folder", type=folder_arg)
     s.add_argument("file", type=Path)
     s.add_argument("--name", help="name to give the file in Drive (default: local file name)")
     s.add_argument("--mime", help="MIME type (default: guessed from the name)")
 
-    s = sub.add_parser("move", help="move (and optionally rename) a file to a writable folder")
+    s = sub.add_parser("move", help="move (and optionally rename) a file to a writable folder (or folder/Class-VII)")
     s.add_argument("id")
-    s.add_argument("folder", choices=WRITABLE)
+    s.add_argument("folder", type=folder_arg)
     s.add_argument("--name", help="new name for the file")
 
     a = p.parse_args(argv)
