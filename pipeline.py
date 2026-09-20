@@ -32,6 +32,7 @@ Needs QP_BRIDGE_URL and QP_BRIDGE_TOKEN in the environment, node, and
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import os
 import shutil
@@ -93,6 +94,40 @@ def docx_text(path: Path) -> str:
     xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8", "replace")
     paras = re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
     return "\n".join("".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)) for p in paras)
+
+
+SOURCE_LINE = re.compile(r"Source(?: file)?:\s*`?([^`\n\u00b7(]+?)`?\s*(?:\u00b7|\(|$)", re.M)
+
+
+def retire_superseded(base: str, stem: str, needsfixes: dict, archive: dict, work: Path, result: dict) -> None:
+    """A paper that has just been formatted replaces an earlier attempt of the same paper that is still in
+    3_Needs-Fixes (the teacher fixed it and re-uploaded): the old review note and the old original are
+    parked in 4_Archive as *_superseded so the folder only shows papers that still need work."""
+    for note in (f"{base}_REVIEW.docx", f"{base}_REVIEW.md"):
+        if note not in needsfixes:
+            continue
+        tmp = work / "superseded" / note
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            qp.download(needsfixes[note], tmp)
+            text = docx_text(tmp) if note.endswith(".docx") else tmp.read_text(encoding="utf-8", errors="replace")
+        except (qp.BridgeError, OSError, KeyError) as e:
+            result["notes"].append(f"could not read {note} in 3_Needs-Fixes: {e}")
+            continue
+        m = SOURCE_LINE.search(text)
+        src = m.group(1).strip() if m else None
+        if src and src in needsfixes:
+            p = Path(src)
+            new = free_name(archive, p.stem + "_superseded", p.suffix)
+            mv = qp.move(needsfixes.pop(src), "archive", new)
+            archive[mv["name"]] = mv["id"]
+            result["notes"].append(f"earlier attempt {src} moved from 3_Needs-Fixes to 4_Archive as {mv['name']}")
+            log(f"  -> superseded: {src} -> 4_Archive/{mv['name']}")
+        new = free_name(archive, f"{stem}_REVIEW_superseded", Path(note).suffix)
+        mv = qp.move(needsfixes.pop(note), "archive", new)
+        archive[mv["name"]] = mv["id"]
+        result["notes"].append(f"{note} moved from 3_Needs-Fixes to 4_Archive as {mv['name']}")
+        log(f"  -> superseded: {note} -> 4_Archive/{mv['name']}")
 
 
 def review_docx_for(review_md: Path) -> Path:
@@ -241,6 +276,7 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
         archive_names[mv["name"]] = mv["id"]
         result["moved"] = {"folder": "archive", "name": mv["name"]}
         log(f"  -> 2_Formatted: {docx_name} + {review_name}; original archived as {mv['name']}")
+        retire_superseded(base, stem, needsfixes_names, archive_names, work, result)
     return result
 
 

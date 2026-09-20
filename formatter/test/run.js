@@ -210,6 +210,45 @@ async function makeFixture() {
   assert.ok(srev.markdown.includes("Adds up: A 10 + F 10 = 20"), srev.markdown);
   assert.ok(!srev.markdown.includes("Duplicate question number"), srev.markdown);
 
+  // --- an English paper: table-of-contents lines, "Q1." with "A. / B." parts and "1. 2." items, options one per
+  //     line under a lettered part, two headings for one section, class in the file name != class in the header
+  const engDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VII\t\tSubject: English\t\tMarks: 20"),
+    p("Date: 01/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section A: Reading", { center: true }),
+    p("Section B: Grammar and Writing", { center: true }),
+    p("Section A: Reading (10 marks)", { center: true, bold: true }),
+    p("Q1. Read the passage and answer the questions:\t\t(1x5=5 m)"),
+    p("A. Where is the tree located?"),
+    p("(a) Delhi"), p("(b) Kolkata, near Howrah"), p("(c) Mumbai"), p("(d) Chennai"),
+    p("B. Complete the sentences."),
+    p("1. The tree is very _____."), p("2. It grows in _____."),
+    p("Q2. Do as directed:\t\t(5 m)"),
+    p("1. Write the plural of box."), p("2. Write the opposite of hot."),
+    p("Section B: I. Grammar (5 marks)", { center: true, bold: true }),
+    p("Q3. Fill in the blanks:\t\t(1x5=5 m)"),
+    p("1. He ___ a boy."), p("2. They ___ playing."),
+    p("Section B. II. Writing (5 marks)", { center: true, bold: true }),
+    p("Q4. Write a letter to your friend about your holidays.\t\t(5 m)"),
+  ] }] });
+  const engPath = path.join(dir, "English_VIII_HYE_2026_27.docx");
+  fs.writeFileSync(engPath, await Packer.toBuffer(engDoc));
+  const em = buildModel(await parseDocx(fs.readFileSync(engPath)), path.basename(engPath));
+  assert.deepStrictEqual(em.sections.map((x) => x.letter), ["A", "B", "B"], "table-of-contents lines dropped; second Section B heading kept as a part");
+  assert.strictEqual(em.sections[2].part, true);
+  const eq = em.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(eq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 5], [4, 5]], "1. items under Q1. are sub-parts");
+  assert.deepStrictEqual(eq[0].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(A)", "(B)", "(1)", "(2)"], "A./B. parts and 1./2. items keep their labels");
+  assert.deepStrictEqual(eq[0].items.find((i) => i.kind === "opts").items.map(plain), ["a) Delhi", "b) Kolkata, near Howrah", "c) Mumbai", "d) Chennai"], "options one per line under a lettered part");
+  const erev = review(em, { date: new Date("2026-09-20T06:00:00Z") });
+  assert.ok(erev.markdown.includes("Adds up: A 10 + B 10 = 20"), erev.markdown);
+  assert.ok(!erev.markdown.includes("Duplicate question number"), erev.markdown);
+  assert.ok(erev.markdown.includes("File name says Class VIII, the paper's header says Class VII"), erev.markdown);
+  assert.ok(!erev.markdown.includes("Subject code missing") && !erev.markdown.includes("General Instructions"), "no subject-code / instructions noise below Class IX: " + erev.markdown);
+  assert.strictEqual(erev.blocking, false);
+
   // --- garbled Devanagari (a PDF converted back to Word) is detected; real Hindi is not
   const real = garbledDevanagari("देबू कौन सी कक्षा में पढ़ता था ? नैना की दादी के न आने का क्या कारण था ?");
   assert.ok(real.marks > 10 && real.ratio < 0.1, JSON.stringify(real));

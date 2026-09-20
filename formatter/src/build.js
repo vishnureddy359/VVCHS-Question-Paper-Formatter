@@ -115,7 +115,7 @@ const HEADING = (text) => new Paragraph({
   children: [new TextRun({ text, font: FONT, size: 28, bold: true, underline: {} })],
 });
 
-const INSTR = (runs, o = {}) => P(runs, { bold: true, after: o.after == null ? 80 : o.after, keepNext: true, align: o.align });
+const INSTR = (runs, o = {}) => P(runs, { bold: true, after: o.after == null ? 80 : o.after, keepNext: o.keepNext == null ? true : o.keepNext, align: o.align });
 const spacer = () => new Paragraph({ spacing: { before: 0, after: 0, line: 120, lineRule: "exact" }, children: [] });
 
 // ---------- images ----------
@@ -296,22 +296,29 @@ function renderEntry(e, section, showInferred) {
   const explicit = isQ && e.marks != null && (e.marksSource === "paper" || e.marksSource === "paper (inner line)" || e.marksSource === "OR twin") && !e.items.some((x) => x.kind === "sub" && x.marks != null);
   const stemMark = isQ ? (e.stemSubMarks != null ? markText(e.stemSubMarks) : (explicit || (showInferred && e.marksSource !== "sum of sub-parts") ? markText(e.marks) : null)) : (e.marks != null ? markText(e.marks) : null);
 
+  // keep a question on one page only while it is short: a long passage with many parts must be allowed to
+  // break, or Word pushes the whole chain (and everything chained before it) to the next page
+  const textLen = items.reduce((a, x) => a + (x.runs ? plain(x.runs).length : 0) + (x.items ? x.items.reduce((b, o) => b + plain(o).length, 0) : 0), 0);
+  const longEntry = textLen > 900 || items.length > 14;
+  // in a long entry a paragraph still stays with the option row or image that belongs to it
+  const keepWith = (idx) => { const nx = items[idx + 1]; return !!nx && (nx.kind === "opts" || nx.kind === "image" || nx.kind === "images" || nx.kind === "or"); };
   const renderItem = (it, idx, ctx) => {
     const last = idx === items.length - 1;
     const after = last ? 120 : undefined;
     const right = ctx.right;
+    const chain = !last && (!longEntry || idx === 0 || keepWith(idx));
     switch (it.kind) {
       case "stem": {
         const runs = e.alt ? [{ text: `(${e.alt}) ` }].concat(it.runs) : it.runs;
-        if (isQ && e.number != null) return [Q(questionLabel(e), runs, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: !last })];
+        if (isQ && e.number != null) return [Q(questionLabel(e), runs, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
         if (e.center) return [INSTR(runs, { align: AlignmentType.CENTER, after })];
-        return [INSTR(runs, { after: last ? 80 : 40 })];
+        return [INSTR(runs, { after: last ? 80 : 40, keepNext: chain })];
       }
-      case "cont": return [C(it.runs, { mark: markText(it.marks && it.marks !== e.marks ? it.marks : null), right, after: last ? 120 : 40, keepNext: !last })];
+      case "cont": return [C(it.runs, { mark: markText(it.marks && it.marks !== e.marks ? it.marks : null), right, after: last ? 120 : 40, keepNext: chain })];
       case "sub": {
         // a nested label "(d) (i) …" would overflow the hanging indent, so it rides with the text
         const runs = it.nested ? [{ text: it.nested + " " }].concat(it.runs) : it.runs;
-        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: !last })];
+        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: chain })];
       }
       case "opts": {
         const n = it.items.length;

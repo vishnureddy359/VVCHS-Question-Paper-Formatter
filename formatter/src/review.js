@@ -5,7 +5,7 @@
 
 "use strict";
 
-const { plain } = require("./model");
+const { plain, normalizeClass, subjectSlug, romanToInt, topSubs } = require("./model");
 
 const FIGURE_WORDS = /\b(figure|fig\.|diagram|adjoining|picture|image|graph shown|in the given figure|the given diagram|on the (?:given |outline |political |physical )?map|outline map|in the map|map of india|map of the world)\b/i;
 const DRAW_WORDS = /\b(draw|construct|sketch|plot|represent .* on)\b/i;
@@ -64,8 +64,15 @@ function review(model, opts = {}) {
   // ---------------------------------------------------------------- 1. marks arithmetic
   const sectionTotals = [];
   let paperSum = 0, allKnown = true;
+  // "Section B: I. Grammar" + "Section B. II. Writing" are two parts of one section: add them up together
+  const merged = [];
   for (const s of model.sections) {
-    const groups = groupQuestions(s);
+    const last = merged[merged.length - 1];
+    if (s.part && last && last.letter === s.letter) last.parts.push(s); else merged.push({ letter: s.letter, parts: [s] });
+  }
+  for (const ms of merged) {
+    const s = ms.parts[0];
+    const groups = ms.parts.flatMap(groupQuestions);
     const missing = [];
     let sum = 0;
     for (const g of groups) {
@@ -73,7 +80,16 @@ function review(model, opts = {}) {
       if (m == null) { missing.push("Q" + g.number); allKnown = false; }
       else sum += m;
     }
-    const expected = s.marksExpr ? s.marksExpr.total : null;
+    const totals = ms.parts.map((p) => (p.marksExpr ? p.marksExpr.total : null));
+    const expected = totals.every((t) => t != null) ? totals.reduce((a, t) => a + t, 0) : (totals.find((t) => t != null) ?? null);
+    // a section with text but no numbered question (a reading passage whose questions carry no number):
+    // its marks cannot be checked, but that is not a reason to hold the paper
+    if (!groups.length && expected != null && ms.parts.some((p) => p.instr.length || p.entries.length)) {
+      f.marks.push(`Section ${s.letter}: no question number found, so its ${expected} marks could not be checked (the text is kept as written).`);
+      sectionTotals.push({ letter: s.letter, sum: expected, expected, missing: [], count: 0, expectedCount: null, unchecked: true });
+      paperSum += expected;
+      continue;
+    }
     sectionTotals.push({ letter: s.letter, sum, expected, missing, count: groups.length, expectedCount: s.marksExpr && s.marksExpr.count });
     paperSum += sum;
     if (s.implicit) { /* no heading to compare against; the paper total is checked below */ }
@@ -84,13 +100,15 @@ function review(model, opts = {}) {
     } else if (expected == null && missing.length) {
       f.marks.push(`Section ${s.letter}: ${missing.join(", ")} carr${missing.length === 1 ? "ies" : "y"} no mark and the section heading gives no total.`);
     }
-    if (s.marksExpr && s.marksExpr.count && groups.length !== s.marksExpr.count) {
+    if (ms.parts.length === 1 && s.marksExpr && s.marksExpr.count && groups.length !== s.marksExpr.count) {
       f.marks.push(`Section ${s.letter}: heading says ${s.marksExpr.count} questions, paper has ${groups.length}.`);
     }
     for (const g of groups) for (const p of g.parts) {
-      const subs = p.items.filter((x) => x.kind === "sub");
+      const subs = topSubs(p.items.filter((x) => x.kind === "sub"));
       const withMarks = subs.filter((x) => x.marks != null);
-      if (withMarks.length && withMarks.length < subs.length && !p.items.some((x) => x.kind === "or")) {
+      const stemText = plain((p.items.find((x) => x.kind === "stem") || { runs: [] }).runs);
+      const abAlt = p.abParts || (/^\(?A\)/.test(stemText) && subs.length === 1 && subs[0].label === "(B)");
+      if (withMarks.length && withMarks.length < subs.length && !abAlt && !p.items.some((x) => x.kind === "or")) {
         const none = subs.filter((x) => x.marks == null).map((x) => x.label);
         f.marks.push(`${qLabel(p)}: mark shown on ${withMarks.map((x) => x.label).join(", ")} but not on ${none.join(", ")}.`);
       }
@@ -113,10 +131,18 @@ function review(model, opts = {}) {
   const n = model.naming;
   if (n.conflict) f.header.push(`Exam name conflict: file named ${n.fileCode}, paper says ${h.exam}. Output uses ${n.headerCode} (from the paper). Confirm.`);
   if (!h.school && !h.exam && !h.cls) f.header.push("No header block in the file: class, subject, marks, date and time were taken from the file name or left blank in the template.");
+  const senior = (romanToInt(h.cls || "") || 0) >= 9;
+  if (h.fromFile && h.fromFile.cls && h.cls && !h.missing.includes("class") && h.fromFile.cls !== normalizeClass(h.cls)) {
+    f.header.push(`File name says Class ${h.fromFile.cls}, the paper's header says Class ${h.cls}; filed under Class ${h.cls}. Confirm which is right.`);
+  }
+  if (h.fromFile && h.fromFile.subject && h.subject && !h.missing.includes("subject") && subjectSlug(h.fromFile.subject) !== "Paper" && subjectSlug(h.fromFile.subject) !== subjectSlug(h.subject)) {
+    f.header.push(`File name says ${h.fromFile.subject}, the paper's header says ${h.subject}; filed under ${subjectSlug(h.subject)}. Confirm.`);
+  }
   for (const m of h.missing) {
-    if (m === "general instructions") f.header.push("No General Instructions block — the template needs one (the standard 5 lines will be added when confirmed).");
+    // subject codes and the CBSE instructions block only matter from Class IX up; below that they are noise
+    if (m === "general instructions") { if (senior) f.header.push("No General Instructions block."); }
     else if (m === "roll no. line") f.header.push("Roll No. line missing (added by the template).");
-    else if (m === "subject code") f.header.push("Subject code missing after the subject name (e.g. Mathematics (041)).");
+    else if (m === "subject code") { if (senior) f.header.push("Subject code missing after the subject name (e.g. Mathematics (041))."); }
     else if (m === "class" || m === "subject") f.header.push(`${m[0].toUpperCase() + m.slice(1)} taken from the file name (${h.fromFile ? h.fromFile[m === "class" ? "cls" : "subject"] : "?"}).`);
     else f.header.push(`${m[0].toUpperCase() + m.slice(1)} missing from the header.`);
   }
@@ -126,7 +152,7 @@ function review(model, opts = {}) {
   const numbers = [];
   for (const s of model.sections) {
     const nums = groupQuestions(s).map((g) => g.number);
-    if (s.title && nums.length) numbers.push("restart");
+    if ((s.title || s.part) && nums.length) numbers.push("restart");
     numbers.push(...nums);
   }
   let seen = new Set(), expect = 1;
@@ -135,7 +161,8 @@ function review(model, opts = {}) {
   if (firstNum != null && firstNum !== 1) f.structure.push(`Numbering starts at Q${firstNum}.`);
   if (firstNum != null) expect = firstNum;
   for (const num of numbers) {
-    if (num === "restart") { seen = new Set(); expect = 1; continue; }
+    // numbering that starts again at 1 (a new part of the paper) is a restart, not a duplicate
+    if (num === "restart" || (num === 1 && seen.size)) { seen = new Set(); expect = 1; if (num === "restart") continue; }
     if (seen.has(num)) dups.push(num);
     seen.add(num);
     while (expect < num) { gaps.push(expect); expect++; }
@@ -156,7 +183,9 @@ function review(model, opts = {}) {
       if (lastOr) {
         const next = entries[i + 1];
         const twin = next && next.kind === "question" && next.number === e.number;
-        if (!twin) block(f.structure, `${label}: OR at the end of the question but no alternative follows.`);
+        if (twin) { /* fine */ }
+        else if (next && next.kind === "question") f.structure.push(`${label}: OR is followed by Q${next.number}, a differently numbered question — if they are alternatives, number both Q${e.number}.`);
+        else block(f.structure, `${label}: OR at the end of the question but no alternative follows.`);
       }
       if (items.some((x) => x.kind === "or" && x.glued)) f.wording.push(`${label}: "OR" glued to the end of a sentence — set on its own line.`);
       const st = stemText(e);

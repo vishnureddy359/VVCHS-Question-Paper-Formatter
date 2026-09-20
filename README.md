@@ -44,6 +44,9 @@ runs the formatter and then:
 - **blocking issues** (missing figure, marks that don't add up, incomplete
   question): uploads the review to `3_Needs-Fixes` and moves the original there
   unchanged, so the teacher can fix it and re-upload with `_v2`;
+- **a corrected re-upload**: when a paper formats cleanly and an earlier attempt
+  of the same paper is still in `3_Needs-Fixes`, that attempt's note and original
+  are moved to `4_Archive` with a `_superseded` suffix;
 - **formatter error**: leaves the file in the inbox and reports it;
 - **our own output already in the target folder** while the original is still
   in the inbox (a move that stalled in an earlier run): uploads whatever is
@@ -69,6 +72,17 @@ question numbers, `क) ख) ग)` sub-parts, `(i) (ii) (iii)` option rows, mark
 written as `(1x5 M)`, `(1 M)` or `अंक`, papers without section headings
 (primary classes), and matching exercises laid out as two columns. Devanagari
 runs are set in Mangal as the complex-script font.
+
+What the review note does and does not hold against a paper:
+
+- Blocking: marks that do not add up, a figure or diagram that the text refers
+  to but the file lacks, an OR with no alternative, unreadable text.
+- Not blocking: a map question without a map (outline maps are printed
+  separately), missing per-question marks when the section total is given, a
+  file name whose class or subject differs from the paper's header (the paper
+  is filed by its header and the note asks you to confirm).
+- Subject codes and the General Instructions block are only expected from
+  Class IX up, so notes for younger classes do not mention them.
 
 Each run writes `work/last_run.json` with the outcome per file. Exit code is 1
 if any file errored.
