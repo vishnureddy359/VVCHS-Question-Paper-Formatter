@@ -7,7 +7,7 @@
  *
  * Request: POST with a JSON body
  *
- *   {"token": "<secret>", "action": "list|download|upload|move|ping", ...}
+ *   {"token": "<secret>", "action": "list|download|upload|move|track|notify|ping", ...}
  *
  * Folder keys: inbox, formatted, needsfixes, archive (writable), template
  * (read only). For formatted, needsfixes and archive a key may carry a class
@@ -24,7 +24,17 @@
  *   move     {id, folder, name?}            -> {id, name, folder}
  *            moves (and optionally renames) a file that is already inside
  *            the pipeline tree; refuses a name clash in the destination.
- *   ping     {}                             -> {ok: true, folders: [...]}
+ *   track    {row: {...}}                   -> {ok: true, url, row}
+ *            appends one row to the tracker sheet "Question Papers - Tracker"
+ *            (created next to the pipeline folders on first use; its id is kept
+ *            in the script property TRACKER_ID). Keys of row are matched to the
+ *            TRACK_COLUMNS headings; unknown keys are ignored.
+ *   notify   {id, subject, body, html?}      -> {sent: true, to} | {sent: false, reason}
+ *            emails the owner (uploader) of the given pipeline file. The bridge
+ *            picks the recipient itself, so the pipeline cannot mail anyone else.
+ *            The script property COORDINATOR_EMAIL, when set, is copied on every
+ *            mail and used as the reply-to address.
+ *   ping     {}                             -> {ok: true, folders: [...], tracker}
  *
  * Errors are returned as {"error": "<message>"}. The bridge never deletes.
  */
@@ -39,6 +49,12 @@ const FOLDER_IDS = {
 const WRITABLE = ["inbox", "formatted", "needsfixes", "archive"];
 const CLASS_AWARE = ["formatted", "needsfixes", "archive"];
 const CLASS_FOLDER = /^Class-(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII)$/;
+const TRACKER_NAME = "Question Papers - Tracker";
+const TRACK_COLUMNS = [
+  "Processed (IST)", "Original file", "Uploaded by", "Paper", "Class", "Subject", "Exam", "Session",
+  "Result", "Filed in", "Formatted paper", "Review note", "Blocking issues", "Other notes", "Marks", "From PDF", "Emailed",
+];
+const MAIL_SENDER = "VVCHS Question Papers";
 
 function doPost(e) {
   let body;
@@ -51,11 +67,13 @@ function doPost(e) {
   if (!token || body.token !== token) return respond({ error: "unauthorized" });
   try {
     switch (body.action) {
-      case "ping": return respond({ ok: true, folders: Object.keys(FOLDER_IDS), classFolders: true });
+      case "ping": return respond(ping());
       case "list": return respond(listFiles(body));
       case "download": return respond(downloadFile(body));
       case "upload": return respond(uploadFile(body));
       case "move": return respond(moveFile(body));
+      case "track": return respond(trackRow(body));
+      case "notify": return respond(notifyOwner(body));
       default: return respond({ error: "unknown action: " + body.action });
     }
   } catch (err) {
@@ -118,8 +136,8 @@ function nameTaken(folder, name, exceptId) {
 
 // ---------------------------------------------------------------- actions
 
-function fileInfo(file, sub) {
-  return {
+function fileInfo(file, sub, withOwner) {
+  const info = {
     id: file.getId(),
     name: file.getName(),
     mimeType: file.getMimeType(),
@@ -127,13 +145,26 @@ function fileInfo(file, sub) {
     modified: file.getLastUpdated().toISOString(),
     sub: sub || "",
   };
+  if (withOwner) info.owner = ownerEmail(file);
+  return info;
+}
+
+/** Email of the account that owns (uploaded) the file, or "" when Drive does not expose it (shared drives). */
+function ownerEmail(file) {
+  try {
+    const owner = file.getOwner();
+    return owner ? String(owner.getEmail() || "") : "";
+  } catch (err) {
+    return "";
+  }
 }
 
 function listFiles(body) {
   const target = resolveFolder(body.folder, false);
   const files = [];
+  const withOwner = target.key === "inbox"; // the pipeline wants to know who uploaded each paper
   const it = target.folder.getFiles();
-  while (it.hasNext()) files.push(fileInfo(it.next(), target.sub));
+  while (it.hasNext()) files.push(fileInfo(it.next(), target.sub, withOwner));
   // a class-aware root also reports its Class-* sub-folders, so the pipeline sees every name in one call
   if (!target.sub && CLASS_AWARE.indexOf(target.key) >= 0) {
     const subs = target.folder.getFolders();
@@ -152,7 +183,7 @@ function downloadFile(body) {
   const file = DriveApp.getFileById(String(body.id));
   if (!inPipelineTree(file)) throw new Error("file is not in the pipeline folders");
   const blob = file.getBlob();
-  return { id: file.getId(), name: file.getName(), mimeType: blob.getContentType(), base64: Utilities.base64Encode(blob.getBytes()) };
+  return { id: file.getId(), name: file.getName(), mimeType: blob.getContentType(), owner: ownerEmail(file), base64: Utilities.base64Encode(blob.getBytes()) };
 }
 
 function uploadFile(body) {
@@ -177,4 +208,77 @@ function moveFile(body) {
   file.moveTo(target.folder);
   if (newName !== file.getName()) file.setName(newName);
   return { id: file.getId(), name: file.getName(), folder: body.folder };
+}
+
+// ---------------------------------------------------------------- tracker sheet
+
+function ping() {
+  const props = PropertiesService.getScriptProperties();
+  const trackerId = props.getProperty("TRACKER_ID");
+  let tracker = "";
+  if (trackerId) {
+    try { tracker = DriveApp.getFileById(trackerId).getUrl(); } catch (err) { tracker = ""; }
+  }
+  // Mail and Sheets need scopes the owner grants once by running this function in the editor;
+  // until then ping still answers, and says which scope is missing.
+  let mailQuota = null, mail = "ok";
+  try { mailQuota = MailApp.getRemainingDailyQuota(); } catch (err) { mail = "not authorized: run ping from the Apps Script editor once and accept the permissions"; }
+  let sheets = "ok";
+  try { SpreadsheetApp.getActive(); } catch (err) { sheets = "not authorized: run ping from the Apps Script editor once and accept the permissions"; }
+  return {
+    ok: true, folders: Object.keys(FOLDER_IDS), classFolders: true, tracker: tracker,
+    notify: true, coordinator: !!props.getProperty("COORDINATOR_EMAIL"), mail: mail, mailQuota: mailQuota, sheets: sheets,
+  };
+}
+
+/** The tracker spreadsheet, created next to the pipeline folders on first use. */
+function trackerSheet() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty("TRACKER_ID");
+  if (id) {
+    try { return SpreadsheetApp.openById(id).getSheets()[0]; } catch (err) { /* deleted or moved away: make a new one */ }
+  }
+  const ss = SpreadsheetApp.create(TRACKER_NAME);
+  const file = DriveApp.getFileById(ss.getId());
+  const parents = DriveApp.getFolderById(FOLDER_IDS.inbox).getParents();
+  if (parents.hasNext()) file.moveTo(parents.next());
+  const sheet = ss.getSheets()[0];
+  sheet.setName("Papers");
+  sheet.getRange(1, 1, 1, TRACK_COLUMNS.length).setValues([TRACK_COLUMNS]).setFontWeight("bold");
+  sheet.setFrozenRows(1);
+  props.setProperty("TRACKER_ID", ss.getId());
+  return sheet;
+}
+
+function trackRow(body) {
+  const row = body.row;
+  if (!row || typeof row !== "object") throw new Error("track needs a row object");
+  const sheet = trackerSheet();
+  const values = TRACK_COLUMNS.map(function (col) {
+    const v = row[col];
+    return v == null ? "" : typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? v : JSON.stringify(v);
+  });
+  sheet.appendRow(values);
+  return { ok: true, url: sheet.getParent().getUrl(), row: sheet.getLastRow() };
+}
+
+// ---------------------------------------------------------------- email
+
+/** Email the owner of a pipeline file. The recipient is always taken from the file, never from the request. */
+function notifyOwner(body) {
+  const file = DriveApp.getFileById(String(body.id));
+  if (!inPipelineTree(file)) throw new Error("file is not in the pipeline folders");
+  const subject = String(body.subject || "").trim();
+  const text = String(body.body || "").trim();
+  if (!subject || !text) throw new Error("notify needs subject and body");
+  const to = ownerEmail(file);
+  if (!to) return { sent: false, reason: "Drive does not expose the uploader's email for " + file.getName() };
+  if (MailApp.getRemainingDailyQuota() < 1) return { sent: false, reason: "daily email quota exhausted" };
+  const coordinator = PropertiesService.getScriptProperties().getProperty("COORDINATOR_EMAIL") || "";
+  const options = { name: MAIL_SENDER };
+  if (body.html) options.htmlBody = String(body.html);
+  if (coordinator && coordinator.toLowerCase() !== to.toLowerCase()) options.cc = coordinator;
+  if (coordinator) options.replyTo = coordinator;
+  MailApp.sendEmail(to, subject, text, options);
+  return { sent: true, to: to, cc: options.cc || "" };
 }

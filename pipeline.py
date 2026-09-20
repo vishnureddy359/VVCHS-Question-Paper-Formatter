@@ -18,12 +18,15 @@ The inbox therefore only ever holds papers that still need processing, which mak
 re-running safe.
 
 Usage:
-    python3 pipeline.py run [--dry-run] [--only NAME] [--work DIR] [--json]
+    python3 pipeline.py run [--dry-run] [--only NAME] [--work DIR] [--json] [--class-folders] [--track] [--notify]
 
-    --dry-run   download and format, but do not upload or move anything in Drive
-    --only      process just the inbox file with this exact name
-    --work      working directory for downloads and output (default: ./work)
-    --json      print a machine-readable summary at the end
+    --dry-run        download and format, but do not upload or move anything in Drive
+    --only           process just the inbox file with this exact name
+    --work           working directory for downloads and output (default: ./work)
+    --json           print a machine-readable summary at the end
+    --class-folders  file outputs into Class-<n> sub-folders (needs the class-aware bridge)
+    --track          append one row per paper to the tracker sheet (bridge action "track")
+    --notify         email the teacher who uploaded each paper with the outcome (bridge action "notify")
 
 Needs QP_BRIDGE_URL and QP_BRIDGE_TOKEN in the environment, node, and
 `npm install` done inside formatter/.
@@ -167,6 +170,7 @@ def route_unreadable(entry: dict, work: Path, needsfixes: dict, dry_run: bool, r
     result["name"] = base
     review = work / "out" / base / f"{base}_REVIEW.md"
     review.parent.mkdir(parents=True, exist_ok=True)
+    result["review_md"] = str(review)
     review.write_text(
         f"# Review — {base}\n"
         f"Source: {name} · Reviewed {time.strftime('%-d %b %Y')} · Status: NEEDS FIXES — moved to 3_Needs-Fixes\n\n"
@@ -230,6 +234,8 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
         review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + PDF_NOTE, encoding="utf-8")
     result["name"] = base
     result["status"] = "needs-fixes" if blocking else "formatted"
+    result["review_md"] = str(review_path)
+    result["from_pdf"] = from_pdf
     fmt_dest, nf_dest, ar_dest = dest("formatted", base), dest("needsfixes", base), dest("archive", base)
     result["marks"] = summary.get("marks")
     result["headerMarks"] = summary.get("headerMarks")
@@ -294,6 +300,185 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     return result
 
 
+# ---------------------------------------------------------------- tracker sheet + teacher email
+
+TRACK = False   # set by --track
+NOTIFY = False  # set by --notify
+
+BLOCKING_MARK = "**[blocking]**"
+RESULT_LABEL = {"formatted": "Formatted", "needs-fixes": "Needs fixes", "unreadable": "Unreadable PDF",
+                "recovered": "Recovered", "error": "Error"}
+
+
+def review_findings(review_md: str | None) -> tuple[list[str], int]:
+    """(blocking findings as plain text, number of other findings) from a review note on disk.
+    The "Changes made by the formatter" section is bookkeeping and is not counted."""
+    if not review_md or not Path(review_md).is_file():
+        return [], 0
+    blocking, others, skip = [], 0, False
+    for line in Path(review_md).read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            skip = line.lower().startswith("## changes")
+            continue
+        if skip or not line.startswith("- "):
+            continue
+        text = line[2:].strip()
+        if BLOCKING_MARK in text:
+            blocking.append(text.replace(BLOCKING_MARK, "").replace("**", "").strip())
+        else:
+            others += 1
+    return blocking, others
+
+
+def name_parts(base: str | None) -> dict:
+    """Subject_Class_Exam_Session -> the four fields (blank when the name does not follow the pattern)."""
+    toks = (base or "").split("_")
+    keys = ("subject", "class", "exam", "session")
+    return {k: (toks[i] if i < len(toks) else "") for i, k in enumerate(keys)}
+
+
+def ist_now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.gmtime(time.time() + 330 * 60)) + " IST"
+
+
+def folder_label(spec: str | None) -> str:
+    names = {"formatted": "2_Formatted", "needsfixes": "3_Needs-Fixes", "archive": "4_Archive", "inbox": "1_Inbox"}
+    if not spec:
+        return ""
+    key, _, sub = spec.partition("/")
+    return names.get(key, key) + (f"/{sub}" if sub else "")
+
+
+def filed_in(result: dict) -> str:
+    """Where the paper's outcome lives: the formatted paper's folder, else where the original was moved."""
+    if result["status"] == "error":
+        return "1_Inbox (left in place)"
+    for u in result.get("uploaded", []):
+        if u["name"].endswith(".docx") and not u["name"].endswith("_REVIEW.docx"):
+            return folder_label(u["folder"])
+    moved = result.get("moved") or {}
+    return folder_label(moved.get("folder"))
+
+
+def uploaded_link(result: dict, suffix: str) -> tuple[str, str]:
+    """(name, url) of the uploaded file whose name ends with suffix, or ("", "")."""
+    for u in result.get("uploaded", []):
+        if u["name"].endswith(suffix):
+            return u["name"], qp.file_url(u["id"])
+    return "", ""
+
+
+def compose_email(entry: dict, result: dict, blocking: list[str], others: int) -> tuple[str, str, str] | None:
+    """(subject, text, html) for the teacher, or None when this outcome warrants no mail."""
+    status, base, original = result["status"], result.get("name") or Path(entry["name"]).stem, entry["name"]
+    moved = result.get("moved") or {}
+    paper_name, paper_url = uploaded_link(result, ".docx") if status != "needs-fixes" else ("", "")
+    if paper_name.endswith("_REVIEW.docx"):
+        paper_name, paper_url = "", ""
+    note_name, note_url = uploaded_link(result, "_REVIEW.docx")
+    where = folder_label(moved.get("folder"))
+    lines: list[str] = ["Dear Teacher,", ""]
+    if status in ("formatted", "recovered"):
+        subject = f"[VVCHS] Formatted: {base}"
+        lines.append(f'Your question paper "{original}" has been formatted to the school template.')
+        lines.append("")
+        if paper_name:
+            lines += [f"Formatted paper: {paper_name}", f"  {paper_url}"]
+        if note_name:
+            lines += [f"Review note: {note_name}", f"  {note_url}"]
+        lines.append("")
+        if others:
+            lines.append(f"The review note lists {others} point{'s' if others != 1 else ''} to check (a mark missing on a question, "
+                         "a numbering gap, and the like). Please open it and confirm or correct the paper.")
+        else:
+            lines.append("The review note found nothing to query.")
+        if where:
+            lines.append(f"Your original file has been kept in {where} as {moved.get('name', '')}.")
+    elif status in ("needs-fixes", "unreadable"):
+        subject = f"[VVCHS] Needs fixes: {base}"
+        lines.append(f'Your question paper "{original}" could not be formatted yet. The pipeline found:')
+        lines.append("")
+        lines += [f"  - {b}" for b in blocking] or ["  - see the review note"]
+        lines.append("")
+        if note_name:
+            lines += [f"Review note with the details: {note_name}", f"  {note_url}", ""]
+        lines.append(f"The original file is in {where or '3_Needs-Fixes'}. Please correct it and upload the corrected "
+                     f"file to 1_Inbox. If the name is already taken, add _v2 to the file name (for example "
+                     f"{Path(original).stem}_v2{Path(original).suffix}).")
+    else:
+        return None
+    lines += ["", "This is an automated message from the VVCHS question-paper pipeline. "
+              "Reply to this email to reach the coordinator."]
+    text = "\n".join(lines)
+    html = "".join(_html_line(l) for l in lines)
+    return subject, text, f"<div style=\"font-family:Arial,sans-serif;font-size:14px\">{html}</div>"
+
+
+def _html_line(line: str) -> str:
+    import html as _h
+    stripped = line.strip()
+    if not stripped:
+        return "<br>"
+    if stripped.startswith("http"):
+        return f'<a href="{_h.escape(stripped)}">{_h.escape(stripped)}</a><br>'
+    if stripped.startswith("- "):
+        return f"&nbsp;&nbsp;&bull; {_h.escape(stripped[2:])}<br>"
+    return f"{_h.escape(stripped)}<br>"
+
+
+def after_process(entry: dict, result: dict) -> None:
+    """Email the uploader and append a tracker row for one processed paper. Failures here never undo
+    the filing that already happened; they are recorded in result['notes'] and reported."""
+    blocking, others = review_findings(result.get("review_md"))
+    result["blocking"] = blocking
+    emailed = ""
+    if NOTIFY:
+        mail = compose_email(entry, result, blocking, others)
+        if mail:
+            try:
+                r = qp.notify(entry["id"], *mail)
+                emailed = r.get("to", "") if r.get("sent") else f"no ({r.get('reason', 'not sent')})"
+                log(f"  email: {emailed}")
+            except qp.BridgeError as e:
+                emailed = f"no (error: {e})"
+                result["notes"].append(f"email not sent: {e}")
+                log(f"  email failed: {e}")
+        result["emailed"] = emailed
+    if TRACK:
+        parts = name_parts(result.get("name"))
+        moved = result.get("moved") or {}
+        paper_name, paper_url = uploaded_link(result, ".docx")
+        if paper_name.endswith("_REVIEW.docx"):
+            paper_name, paper_url = "", ""
+        _, note_url = uploaded_link(result, "_REVIEW.docx")
+        marks = ""
+        if result.get("marks") is not None:
+            marks = str(result["marks"]) + (f" / header {result['headerMarks']}" if result.get("headerMarks") is not None else "")
+        row = {
+            "Processed (IST)": ist_now(),
+            "Original file": entry["name"],
+            "Uploaded by": entry.get("owner", ""),
+            "Paper": result.get("name") or "",
+            "Class": parts["class"], "Subject": parts["subject"], "Exam": parts["exam"], "Session": parts["session"],
+            "Result": RESULT_LABEL.get(result["status"], result["status"] or ""),
+            "Filed in": filed_in(result),
+            "Formatted paper": paper_url,
+            "Review note": note_url,
+            "Blocking issues": " | ".join(blocking) if blocking else ("; ".join(result.get("notes", [])) if result["status"] == "error" else ""),
+            "Other notes": others,
+            "Marks": marks,
+            "From PDF": "yes" if result.get("from_pdf") or result.get("converted_from_pdf") or is_pdf(entry) else "no",
+            "Emailed": emailed if NOTIFY else "",
+        }
+        try:
+            r = qp.track(row)
+            result["tracked"] = r.get("row")
+            log(f"  tracker: row {r.get('row')}")
+        except qp.BridgeError as e:
+            result["notes"].append(f"tracker row not added: {e}")
+            log(f"  tracker failed: {e}")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
@@ -315,10 +500,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     results = []
     for entry in sorted(papers, key=lambda f: f["modified"]):
         try:
-            results.append(process(entry, work, formatted_names, needsfixes_names, archive_names, args.dry_run))
+            result = process(entry, work, formatted_names, needsfixes_names, archive_names, args.dry_run)
         except qp.BridgeError as e:
-            results.append({"file": entry["name"], "id": entry["id"], "status": "error", "notes": [str(e)]})
+            result = {"file": entry["name"], "id": entry["id"], "status": "error", "name": None, "uploaded": [], "moved": None, "notes": [str(e)]}
             log(f"ERROR {entry['name']}: {e}")
+        if not args.dry_run and (TRACK or NOTIFY):
+            after_process(entry, result)
+        results.append(result)
 
     summary = {
         "dry_run": args.dry_run,
@@ -348,11 +536,14 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--work", default="work", help="working directory (default: ./work)")
     r.add_argument("--json", action="store_true", help="print a JSON summary")
     r.add_argument("--class-folders", action="store_true", help="file outputs into Class-<n> sub-folders (needs the class-aware bridge, see bridge/README.md)")
+    r.add_argument("--track", action="store_true", help="append a row per paper to the tracker sheet (needs the bridge's track action)")
+    r.add_argument("--notify", action="store_true", help="email the uploading teacher the outcome (needs the bridge's notify action)")
     a = p.parse_args(argv)
     try:
         if a.cmd == "run":
-            global CLASS_FOLDERS
+            global CLASS_FOLDERS, TRACK, NOTIFY
             CLASS_FOLDERS = bool(a.class_folders)
+            TRACK, NOTIFY = bool(a.track), bool(a.notify)
             return cmd_run(a)
     except qp.BridgeError as e:
         print(f"pipeline: error: {e}", file=sys.stderr)

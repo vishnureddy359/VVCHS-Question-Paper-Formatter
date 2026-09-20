@@ -5,7 +5,7 @@ qp.py — command-line client for the VVCHS Question Paper bridge.
 The bridge is a Google Apps Script web app that exposes the "Question Papers"
 Drive pipeline folders (and nothing else). It accepts a JSON POST body:
 
-    {"token": "<secret>", "action": "list|download|upload|move", ...}
+    {"token": "<secret>", "action": "list|download|upload|move|track|notify|ping", ...}
 
 and answers with JSON. Errors come back as {"error": "<message>"}.
 
@@ -28,6 +28,9 @@ Usage:
     python3 qp.py download <file-id> [--out PATH]
     python3 qp.py upload <folder> <local-file> [--name NAME] [--mime TYPE]
     python3 qp.py move <file-id> <folder> [--name NEW_NAME]
+    python3 qp.py ping
+    python3 qp.py track '{"Original file": "...", "Result": "..."}'
+    python3 qp.py notify <file-id> --subject S --body TEXT
 
 Only the Python standard library is used.
 """
@@ -179,6 +182,30 @@ def move(file_id: str, folder: str, name: str | None = None) -> dict:
     return call("move", **fields)
 
 
+def ping() -> dict:
+    """Bridge health: folders, whether class folders / tracker / email are available."""
+    return call("ping")
+
+
+def track(row: dict) -> dict:
+    """Append one row to the tracker sheet. Keys are the sheet's column headings; unknown keys are ignored."""
+    return call("track", row=row)
+
+
+def notify(file_id: str, subject: str, body: str, html: str | None = None) -> dict:
+    """Email the uploader of a pipeline file. The bridge chooses the recipient (the file's owner);
+    returns {"sent": True, "to": ...} or {"sent": False, "reason": ...}."""
+    fields = {"id": file_id, "subject": subject, "body": body}
+    if html:
+        fields["html"] = html
+    return call("notify", **fields)
+
+
+def file_url(file_id: str) -> str:
+    """Drive's viewer link for a file id (the same link the Drive UI shows)."""
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
+
 # ---------------------------------------------------------------- CLI
 
 def _fmt_size(n: int) -> str:
@@ -230,6 +257,16 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("folder", type=folder_arg)
     s.add_argument("--name", help="new name for the file")
 
+    sub.add_parser("ping", help="check the bridge: folders, tracker sheet, email")
+
+    s = sub.add_parser("track", help="append a row to the tracker sheet (JSON object of column -> value)")
+    s.add_argument("row", help='e.g. \'{"Original file": "x.docx", "Result": "test"}\'')
+
+    s = sub.add_parser("notify", help="email the uploader of a pipeline file")
+    s.add_argument("id")
+    s.add_argument("--subject", required=True)
+    s.add_argument("--body", required=True, help="plain-text body")
+
     a = p.parse_args(argv)
     try:
         if a.cmd == "list":
@@ -248,6 +285,18 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "move":
             r = move(a.id, a.folder, a.name)
             print(f"moved {r['id']} -> {a.folder}/{r['name']}")
+        elif a.cmd == "ping":
+            print(json.dumps(ping(), indent=2))
+        elif a.cmd == "track":
+            try:
+                row = json.loads(a.row)
+            except json.JSONDecodeError as e:
+                raise BridgeError(f"row is not JSON: {e}")
+            r = track(row)
+            print(f"row {r.get('row')} added to {r.get('url')}")
+        elif a.cmd == "notify":
+            r = notify(a.id, a.subject, a.body)
+            print(f"sent to {r['to']}" + (f" (cc {r['cc']})" if r.get("cc") else "") if r.get("sent") else f"not sent: {r.get('reason')}")
     except BridgeError as e:
         print(f"qp.py: error: {e}", file=sys.stderr)
         return 1
