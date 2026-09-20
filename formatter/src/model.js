@@ -102,25 +102,31 @@ const RE = {
   roll: /\broll\s*no/i,
   genInstr: /^general\s+instructions?\s*[:\-]?\s*$/i,
   genInstrInline: /^general\s+instructions?\s*[:\-]?\s*(.+)$/i,
-  section: /^section\s*[-–—:]?\s*([a-e])\b\s*[-–—:.]?\s*(.*)$/i,
-  qDot: /^(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*/i,
+  section: /^section\s*[-–—:]?\s*([a-h])\b\s*[-–—:.]?\s*(.*)$/i,
+  qDot: /^(?:(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*|Q\.?\s*([IVX]{1,4})(?:[.):]|\s)\s*)/,
   qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
   qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
   altOnly: /^\(([AB])\)\s+/,
   mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
   orTrail: /\s+OR\s*$/,
-  optLabel: /(?<=^|\s)\(?([a-dA-D])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
+  optLabel: /(?<=^|\s)\(?([a-eA-E])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
+  optNum: /(?<=^|\s)\(?([1-9])\)\s*/g,
   optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
-  subLabel: /^\(?((?:[a-h])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङडचछजझ])\)\s*/i,
-  subDot: /^([a-h])\.\s+(?=[A-Za-z(])/,
+  subLabel: /^\(?((?:[a-l])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङडचछजझ])\)\s*/i,
+  subDot: /^([a-l])\.(?:\s+(?=[A-Za-z(])|(?=[A-Z][a-z]))/i,
+  subNum: /^\(?(\d{1,2})\)\s*/,
+  subNumDot: /^(\d{1,2})\s*[.)]\s*(?!\d)/,
+  subRomanDot: /^((?:i{1,3}|iv|v|vi{0,3}|ix|x))\.\s+(?=[A-Za-z("'“])/i,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
   direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q)/i,
   titleLine: /^(assertion|reason|case[\s-]*study|section|passage|multiple[\s-]*choice|mcq)/i,
   qSplit: /\s(\d+\s*M(?:arks?)?)\s+(?=(?:Q\.?\s*)?\d{1,2}\s*[.)]\s*[A-Za-z(])/i,
   endLine: /^[*\-_=~\s]*(end|all the best|best of luck)?[*\-_=~\s]*$/i,
   marksExpr: /(\d+)\s*[×x*]\s*(\d+)\s*=\s*(\d+)\s*(?:marks?|m|अंक)?/i,
-  marksProduct: /\(\s*(\d+)\s*[×x*]\s*(\d+)(?:\s*=\s*(\d+))?\s*(?:marks?|m|अंक)?\s*\)/i,
+  marksProduct: /[\[(]\s*(\d+(?:\.\d+)?)\s*[×x*]\s*(\d+(?:\.\d+)?)(?:\s*=\s*(\d+(?:\.\d+)?))?\s*(?:marks?|m|अंक)?\s*[\])]/i,
+  bracketTotal: /[\[(][^\])]*?[-–—:\s](\d+)\s*[\])]\s*$/,
+  marksProductBare: /(?:^|\s)(\d+(?:\.\d+)?)\s*[×x*]\s*(\d+(?:\.\d+)?)\s*=\s*(\d+(?:\.\d+)?)\s*(?:marks?|m)?\s*$/i,
   totalOnly: /(\d+)\s*(?:marks?|m)\b/i,
 };
 
@@ -215,6 +221,9 @@ function parseHeader(lines, filename) {
   const fn = /^([A-Za-z]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_(\d{4}[-_]\d{2,4})/.exec(filename || "");
   h.fromFile = fn ? { subject: fn[1], cls: normalizeClass(fn[2]), exam: fn[3].toUpperCase(), session: fn[4].replace("_", "-") } : null;
   if (!h.cls && h.fromFile) { h.cls = h.fromFile.cls; h.missing.push("class"); }
+  // "Subject: ________" left blank in the master copy counts as missing
+  if (h.subject && /^[\s_.\-]*$/.test(h.subject)) h.subject = null;
+  if (h.cls && /^[\s_.\-]*$/.test(h.cls)) h.cls = null;
   if (!h.subject && h.fromFile) { h.subject = h.fromFile.subject; h.missing.push("subject"); }
   if (!h.session && h.fromFile) h.session = h.fromFile.session.replace(/^(\d{4})-(\d{2})(\d{2})$/, "$1-$3");
   if (!h.exam) h.missing.push("exam name");
@@ -249,7 +258,7 @@ function subjectSlug(subject) {
   if (!subject) return "Paper";
   const s = subject.toLowerCase().replace(/[^a-z ]/g, " ").trim();
   if (/^math/.test(s)) return "Maths";
-  if (/social/.test(s)) return "SocialScience";
+  if (/social/.test(s) || /^s\.?s\.?t\b/.test(s) || /^s\.?o\.?\s*sci/.test(s) || /^sst\b/.test(s)) return "SocialScience";
   if (/^eng/.test(s)) return "English";
   if (/^sci/.test(s)) return "Science";
   if (/^hindi/.test(s) || /हिन्दी|हिंदी/.test(subject)) return "Hindi";
@@ -279,6 +288,9 @@ function parseMarksExpr(text) {
   if (pr) return { per: Number(pr[1]), count: Number(pr[2]), total: pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]), text: pr[0] };
   const t = RE.totalOnly.exec(text);
   if (t) return { per: null, count: null, total: Number(t[1]), text: t[0] };
+  // "[READING - 5]" / "(Grammar - 25)": a number closing the bracket at the end of a heading is its total
+  const bt = RE.bracketTotal.exec(text);
+  if (bt) return { per: null, count: null, total: Number(bt[1]), text: bt[0] };
   return null;
 }
 
@@ -295,7 +307,7 @@ function optionItems(text) {
   if (!items.length || items[0].labelStart !== 0) return null;
   // labels should be in order a,b,c,d (case-insensitive) to count as an option row
   const seq = items.map((it) => it.label.toLowerCase());
-  const expected = "abcd".slice(0, seq.length).split("");
+  const expected = "abcde".slice(0, seq.length).split("");
   const startsAtA = seq[0] === "a";
   const ordered = seq.every((l, i) => l === expected[i]) || (!startsAtA && seq.every((l, i) => l.charCodeAt(0) === seq[0].charCodeAt(0) + i));
   if (!ordered) return null;
@@ -314,9 +326,19 @@ function romanItems(text) {
   return items;
 }
 
-function splitOptions(runs) {
+function numItems(text) {
+  const items = [];
+  RE.optNum.lastIndex = 0;
+  let m;
+  while ((m = RE.optNum.exec(text))) items.push({ label: m[1], labelStart: m.index, textStart: m.index + m[0].length });
+  if (items.length < 2 || items[0].labelStart !== 0) return null;
+  if (!items.every((it, k) => Number(it.label) === k + 1)) return null;
+  return items;
+}
+
+function splitOptions(runs, allowNum) {
   const text = plain(runs);
-  const items = optionItems(text) || romanItems(text);
+  const items = optionItems(text) || romanItems(text) || (allowNum ? numItems(text) : null);
   if (!items || items.length < 2) return null;
   return items.map((it, i) => {
     const end = i + 1 < items.length ? items[i + 1].labelStart : text.length;
@@ -341,6 +363,8 @@ class Builder {
     this.sections = [];
     this.section = null;
     this.entry = null; // current question or note
+    this.qDotStyle = false; // questions numbered "Q.1." — then a bare "1)" / "1." line inside a question is a sub-part
+    this.subSeq = 0; // last numbered sub-part in the current question
     this.preamble = []; // entries before the first section
     this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0 };
     this.lastQuestionNumber = 0;
@@ -351,9 +375,13 @@ class Builder {
   }
 
   newSection(letter, rest, runs) {
-    this.section = { letter: letter.toUpperCase(), rest, runs, marksExpr: parseMarksExpr(rest), entries: [], instr: [] };
+    const L = letter.toUpperCase();
+    // "Section B: I. Grammar" followed by "Section B. II. Writing" — the second heading is a part of the same section
+    const part = !!(this.section && this.section.letter === L && this.section.entries.some((e) => e.kind === "question"));
+    this.section = { letter: L, rest, runs, marksExpr: parseMarksExpr(rest), entries: [], instr: [], part };
     this.sections.push(this.section);
     this.entry = null;
+    this.subSeq = 0;
   }
 
   newQuestion(number, alt, runs, marks) {
@@ -361,6 +389,7 @@ class Builder {
     if (runs.length) q.items.push({ kind: "stem", runs });
     this.currentEntries().push(q);
     this.entry = q;
+    this.subSeq = 0;
     if (number != null) this.lastQuestionNumber = number;
     return q;
   }
@@ -438,20 +467,32 @@ class Builder {
     // question start: "Q.1.", "1.", "16.A) (a)", "10.(A)", or Word numbering at level 0
     let qm = RE.qDot.exec(text);
     let number = null, alt = null, cut = 0;
-    if (qm) { number = Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))); cut = qm[0].length; }
-    else if ((qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
-    else if ((qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
-    else if (numLabel && line.num.fmt === "decimal" && line.num.ilvl === 0 && /^\d+/.test(numLabel)) {
-      number = Number(/^\d+/.exec(numLabel)[0]);
+    const wordNum = numLabel && line.num.fmt === "decimal" && line.num.ilvl === 0 && /^\d+/.test(numLabel) ? Number(/^\d+/.exec(numLabel)[0]) : null;
+    const bareMatch = qm ? null : (RE.qNumAlt.exec(text) || RE.qNum.exec(text));
+    const bareNum = bareMatch ? Number(bareMatch[1]) : wordNum;
+    // in a paper that numbers its questions "Q.1." the items under a question are numbered "1. 2. 3." or "1) 2) 3)"
+    // and start again at 1 in every question: such a line is a numbered sub-part, not a question. Only a bare
+    // number that continues the question count (the teacher dropped the "Q") still opens a question.
+    const numSub = this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
+      && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1);
+    if (qm) { number = qm[1] != null ? Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))) : romanToInt(qm[2]); cut = qm[0].length; this.qDotStyle = true; }
+    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
+    else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
+    else if (!numSub && wordNum != null) {
+      number = wordNum;
       // a numbered paragraph whose text is only an OR alternative label
       const a = RE.altOnly.exec(text);
       if (a) { alt = a[1]; cut = a[0].length; }
+    } else if (numSub && wordNum != null && !RE.subNumDot.test(text)) {
+      // Word-numbered item: put the number into the text so it is kept as a labelled sub-part
+      runs = normalizeRuns([{ text: wordNum + ". " }].concat(runs));
+      text = plain(runs);
     }
     if (number != null && number > 0 && number < 100) {
       // a per-part expression "(1x5 M)" / "(1x5=5 M)" at the end of a question line is that question's marks
       // (on a section instruction line the same expression is the section total and must stay in the text)
       if (marks == null) {
-        const pr = RE.marksProduct.exec(text);
+        const pr = RE.marksProduct.exec(text) || RE.marksProductBare.exec(text);
         if (pr && pr.index + pr[0].length >= text.length - 1) {
           marks = pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]);
           runs = normalizeRuns(sliceRuns(runs, 0, pr.index));
@@ -472,7 +513,7 @@ class Builder {
 
     // Word-numbered lower-letter / roman paragraphs => labelled sub-part or option line
     if (numLabel && line.num.fmt !== "decimal" && line.num.fmt !== "bullet") {
-      const lab = numLabel.replace(/\.$/, ")");
+      const lab = numLabel.replace(/[.)]+$/, ")");
       const existing = optionItems(text);
       const first = existing ? existing[0].label : (RE.subLabel.exec(text) || [])[1];
       const labLetter = /^[(]?([A-Za-z])/.exec(lab);
@@ -481,21 +522,22 @@ class Builder {
         runs = normalizeRuns([{ text: lab + " " }].concat(runs));
         text = plain(runs);
       }
-    } else if (numLabel && line.num.fmt === "bullet") {
+    } else if (numLabel && line.num.fmt === "bullet" && !RE.subNumDot.test(text) && !RE.subLabel.test(text) && !RE.subDot.test(text)) {
+      // a bulleted paragraph the teacher also numbered by hand keeps its own label, not the bullet
       runs = normalizeRuns([{ text: "• " }].concat(runs));
       text = plain(runs);
     }
 
     // option row(s): "a) .. b) .. c) .. d) .."  or "(A) .. (B) .."
-    const opts = splitOptions(runs);
+    const opts = splitOptions(runs, this.qDotStyle);
     if (opts && opts.length >= 2 && this.entry) {
       const inMcq = this.mcqContext();
-      const allShort = opts.every((o) => plain(o).length <= 45);
-      if (opts.length >= 3 || inMcq || allShort) { this.push({ kind: "opts", items: opts, marks }); finish(); return; }
+      const allShort = opts.every((o) => plain(o).length <= (opts.length === 2 ? 70 : 45) && !/\?$/.test(plain(o)));
+      if (opts.length >= 3 || inMcq || allShort || text.includes("\t")) { this.push({ kind: "opts", items: opts, marks }); finish(); return; }
     }
 
     // sub-part "(a) ..." / "i) ..." / "a. ..." (single label at line start)
-    const sm = RE.subLabel.exec(text) || RE.subDot.exec(text);
+    const sm = RE.subLabel.exec(text) || RE.subDot.exec(text) || RE.subRomanDot.exec(text) || (numSub ? RE.subNumDot.exec(text) : null);
     // "(B) …" right after OR in a question labelled (A) is the alternative, not a sub-part
     if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^\(?B\)/.test(text)
         && this.entry.items.length && this.entry.items[this.entry.items.length - 1].kind === "or") {
@@ -505,7 +547,17 @@ class Builder {
       return;
     }
     if (sm && this.entry && text.length > sm[0].length) {
-      const label = sm[0].trim().replace(/^\(?([^)]+)\)?$/, "($1)").replace(/\.$/, ")");
+      const label = "(" + sm[1] + ")";
+      if (/^\d+$/.test(sm[1])) this.subSeq = Number(sm[1]);
+      if (marks == null) {
+        // a sub-part with its own "(2x1=2 M)" at the end of the line
+        const pr = RE.marksProduct.exec(text) || RE.marksProductBare.exec(text);
+        if (pr && pr.index > sm[0].length && pr.index + pr[0].length >= text.length - 1) {
+          marks = pr[3] ? Number(pr[3]) : Number(pr[1]) * Number(pr[2]);
+          runs = normalizeRuns(sliceRuns(runs, 0, pr.index));
+          text = plain(runs);
+        }
+      }
       let body = stripPrefix(runs, sm[0].length);
       let nested = null;
       const nm = RE.nestedLabel.exec(plain(body));
@@ -543,6 +595,13 @@ class Builder {
       return;
     }
 
+    // a short title carrying only a total ("Writing Skills   20M") between questions is a part heading
+    if (marks != null && text.length <= 40 && text.split(/\s+/).length <= 5 && !/[.?!:_,]/.test(text) && !line.images.length
+        && this.entry && this.entry.kind === "question" && this.entry.items.some((x) => x.kind === "sub" || x.kind === "opts")) {
+      this.newNote(runs, { center: true, marks });
+      finish();
+      return;
+    }
     // continuation line of the current question / note; a choice "a) …" glued after a colon becomes its own sub-part
     const glued = /:\s+(\(?a[).])\s/i.exec(text);
     if (glued && this.entry) {
@@ -715,14 +774,22 @@ function postProcessEntry(e, section) {
     // merge consecutive 'tables' groups (a floating table before the question line + the rest after it)
     if (it.kind === "tables" && out.length && out[out.length - 1].kind === "tables") { out[out.length - 1].tables.push(...it.tables); continue; }
     if (it.kind === "tables" && out.length && out[out.length - 1].kind === "table") { const prev = out.pop(); out.push({ kind: "tables", tables: [prev.table, ...it.tables] }); continue; }
-    // a run of short single-label sub-parts a..d (no marks) is an MCQ option list
-    if (it.kind === "sub" && /^\([a-d]\)$/i.test(it.label) && it.marks == null && !it.nested) {
+    // a run of single-label sub-parts (a)..(d) (no marks) is an MCQ option list when the four are short, or when
+    // they follow a lettered question part "(A) …" or a "choose / select the correct option" line (options one per line)
+    if (it.kind === "sub" && /^\([a-e]\)$/i.test(it.label) && it.marks == null && !it.nested) {
       let j = i;
       const run = [];
-      while (j < items.length && items[j].kind === "sub" && /^\([a-d]\)$/i.test(items[j].label) && items[j].marks == null && !items[j].nested) { run.push(items[j]); j++; }
+      const sameCase = (l) => (l === l.toLowerCase()) === (it.label === it.label.toLowerCase());
+      while (j < items.length && items[j].kind === "sub" && /^\([a-e]\)$/i.test(items[j].label) && sameCase(items[j].label) && items[j].marks == null && !items[j].nested) { run.push(items[j]); j++; }
       const labels = run.map((x) => x.label.toLowerCase());
-      const ordered = labels.join("") === ["(a)", "(b)", "(c)", "(d)"].slice(0, run.length).join("");
-      if (run.length === 4 && ordered && run.every((x) => isShortOption(x.runs, mcq ? 45 : 30))) {
+      const ordered = labels.join("") === ["(a)", "(b)", "(c)", "(d)", "(e)"].slice(0, run.length).join("");
+      const lower = run.every((x) => x.label === x.label.toLowerCase());
+      let k = out.length - 1;
+      while (k > 0 && (out[k].kind === "cont" || out[k].kind === "image" || out[k].kind === "images")) k--;
+      const prev = out[k];
+      const afterPart = prev && ((prev.kind === "sub" && /^\([A-L]\)$/.test(prev.label))
+        || ((prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs && /\b(choose|select|tick|pick)\b.*\b(option|answer|one)\b|\bcorrect option\b/i.test(plain(prev.runs))));
+      if (ordered && ((run.length === 4 && run.every((x) => isShortOption(x.runs, mcq ? 45 : 60))) || (lower && run.length >= 3 && run.length <= 5 && afterPart))) {
         out.push({ kind: "opts", items: run.map((x) => normalizeRuns([{ text: x.label.replace(/[()]/g, "") + ") " }].concat(x.runs))), marks: null });
         i = j - 1; continue;
       }
@@ -739,6 +806,23 @@ function postProcessEntry(e, section) {
 
 // ---------------------------------------------------------------- marks inference & fixes
 
+// a "(C)" / "(D)" sub-part that sits in a run of unmarked single-line statements (A)(B)(C)(D) is an option, not a part
+function isOptionLike(subs, x) {
+  const i = subs.indexOf(x);
+  const win = subs.slice(Math.max(0, i - 3), i + 4);
+  return x.marks == null && win.filter((y) => /^\([A-D]\)$/.test(y.label) && y.marks == null).length >= 3;
+}
+
+// The sub-parts that carry the question's marks: numbered "(1) (2)" or lettered "(A) (B)" parts when the
+// question has them (their "(a) (b)" or "(i) (ii)" items below are one level down), otherwise all of them.
+function topSubs(subs) {
+  if (!subs.length) return subs;
+  const kind = (l) => (/^\(\d+\)$/.test(l) ? "num" : /^\([A-L]\)$/.test(l) ? "upper" : "other");
+  const first = kind(subs[0].label);
+  if (first === "other") return subs;
+  return subs.filter((x) => kind(x.label) === first);
+}
+
 // Sum sub-part marks, counting OR alternatives (same label twice) once.
 function sumSubs(subs) {
   const byLabel = new Map();
@@ -754,17 +838,37 @@ function inferMarks(model) {
     let prevQ = null;
     for (const e of s.entries) {
       if (e.kind !== "question") continue;
-      const subs = e.items.filter((x) => x.kind === "sub");
+      const allSubs = e.items.filter((x) => x.kind === "sub");
+      const subs = topSubs(allSubs);
       const stem = e.items.find((x) => x.kind === "stem");
       const stemText = stem ? plain(stem.runs) : "";
+      // "Q6. A) Write a letter … 5M" + "B) Write an e-mail … 5M": A and B are alternatives, the question is worth one of them
+      const bIdx = allSubs.findIndex((x) => x.label === "(B)");
+      const abAlternatives = /^\(?A\)/.test(stemText) && bIdx >= 0 && !allSubs.some((x) => /^\([C-L]\)$/.test(x.label) && allSubs.indexOf(x) !== bIdx + 1 && !isOptionLike(allSubs, x));
+      if (abAlternatives) {
+        // "Q8. A) Read extract … (i)…(v)" then "B) Read extract … (i)…(v)": the paper is worth one of the two
+        const partA = allSubs.slice(0, bIdx), partB = allSubs.slice(bIdx + 1);
+        const a = e.marks != null ? e.marks : (partA.length && partA.every((x) => x.marks != null) ? sumSubs(partA) : (partA.some((x) => x.marks != null) ? sumSubs(partA) : null));
+        const b = allSubs[bIdx].marks != null ? allSubs[bIdx].marks : (partB.some((x) => x.marks != null) ? sumSubs(partB) : null);
+        const both = [a, b].filter((m) => m != null);
+        if (both.length) { e.marks = Math.max(...both); e.marksSource = e.marksSource || "alternative A/B"; e.abParts = true; }
+      }
       // "16.(A) (a) Label the diagram. 3M" — the stem line is itself sub-part (a); its mark belongs to (a)
-      if (e.marks != null && e.marksSource === "paper" && /^\(?[a-h]\)/i.test(stemText) && subs.some((x) => x.marks != null)) {
+      else if (e.marks != null && e.marksSource === "paper" && /^\(?[a-h]\)/i.test(stemText) && subs.some((x) => x.marks != null) && !e.items.some((x) => x.kind === "or")) {
         e.stemSubMarks = e.marks;
         e.marks = e.marks + sumSubs(subs);
         e.marksSource = "sum of sub-parts";
       }
-      const subSum = sumSubs(subs);
+      let subSum = sumSubs(subs);
       const subAll = subs.length && subs.every((x) => x.marks != null);
+      // "Do as directed (Any 10)" with eleven 1-mark parts: the question is worth 10, not 11
+      const any = /\b(?:any|attempt any|answer any)\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/i.exec(stemText);
+      if (any && subAll && subs.length > 1) {
+        const words = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+        const n = words[any[1].toLowerCase()] || Number(any[1]);
+        const same = subs.every((x) => x.marks === subs[0].marks);
+        if (n && n < subs.length && same) subSum = n * subs[0].marks;
+      }
       if (e.marks == null) {
         // marks may sit on an item inside the question (e.g. on option (B) of an OR pair, or on the last sub-part)
         const inner = e.items.map((x) => x.marks).filter((m) => m != null);
@@ -859,6 +963,9 @@ function buildModel(parsed, filename) {
     body.push(it);
   }
   const b = new Builder(body, parsed.blocks, header).run();
+  // a list of section names at the top ("Section A: Reading", "Section B: Grammar" …) leaves empty sections
+  // behind that the real headings repeat later: drop them
+  b.sections = b.sections.filter((s, i, all) => s.entries.length || s.instr.length || !all.slice(i + 1).some((x) => x.letter === s.letter));
   if (!b.sections.length && b.preamble.some((e) => e.kind === "question")) {
     // a paper without section headings (typical for primary classes): one unnamed section, split into
     // parts wherever a centred title (e.g. "व्याकरण:") is followed by numbering that starts again
@@ -888,4 +995,4 @@ function buildModel(parsed, filename) {
   return model;
 }
 
-module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, garbledDevanagari, TEXT_W };
+module.exports = { buildModel, plain, normalizeRuns, sliceRuns, parseMarksExpr, examNameOf, examCodeOf, garbledDevanagari, normalizeClass, subjectSlug, romanToInt, topSubs, TEXT_W };

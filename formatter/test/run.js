@@ -12,7 +12,7 @@ const path = require("path");
 const JSZip = require("jszip");
 const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, AlignmentType } = require("docx");
 const { parseDocx } = require("../src/parse");
-const { buildModel, plain, garbledDevanagari } = require("../src/model");
+const { buildModel, plain, garbledDevanagari, subjectSlug } = require("../src/model");
 const { review } = require("../src/review");
 const { formatPaper } = require("../src/index");
 
@@ -172,6 +172,86 @@ async function makeFixture() {
   const hxml = await (await JSZip.loadAsync(fs.readFileSync(hres.docx))).file("word/document.xml").async("string");
   assert.ok(/w:cs="Mangal"/.test(hxml), "Devanagari runs carry a complex-script font");
   assert.ok(!hxml.includes("SECTION "), "no section heading for an implicit section");
+
+  // --- a "Q.1." paper with numbered sub-parts, a numeric answer-key row, Section F and a map question
+  const sstDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: III\t\tSubject: SST (SOCIAL STUDIES)\t\tMarks: 20"),
+    p("Date: 14/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section A (10 marks)", { center: true, bold: true }),
+    p("Q.1. Match the following:\t\t(1 x 5 = 5 m)"),
+    p("1)a,b,c,d,e          2)b,c,a,d,e          3)c,d,b,e,a"),
+    p("Q.2. Very Short Answer Type Question [Any 5]:\t\t(1×5=5 m)"),
+    p("1) Name any two rain fed rivers."),
+    p("2) What is a sledge?"),
+    p("Section F (10 marks)", { center: true, bold: true }),
+    p("Q.3. Read the passage and answer the following questions:\t\t(5 m)"),
+    p("1) Which is the largest river island in the world?\t\t2m"),
+    p("2) How is this island formed?\t\t3m"),
+    p("Q.4. Map-Based Question:\t\t(5 m)"),
+    p("On the map of India, mark the following rivers:"),
+    p("a) Narmada          b) Tapti          c) Kaveri          d) Ganga          e) Brahmaputra"),
+  ] }] });
+  const sstPath = path.join(dir, "SST_3_HYE_2026-27.docx");
+  fs.writeFileSync(sstPath, await Packer.toBuffer(sstDoc));
+  const sm = buildModel(await parseDocx(fs.readFileSync(sstPath)), path.basename(sstPath));
+  assert.strictEqual(sm.naming.base, "SocialScience_III_HYE_2026-27");
+  assert.deepStrictEqual(sm.sections.map((x) => x.letter), ["A", "F"], "sections beyond E are recognised");
+  const sq = sm.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(sq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 5], [4, 5]], "1) lines are sub-parts, not questions");
+  assert.deepStrictEqual(sq[0].items.find((i) => i.kind === "opts").items.map(plain), ["1)a,b,c,d,e", "2)b,c,a,d,e", "3)c,d,b,e,a"], "numeric answer-key row");
+  assert.deepStrictEqual(sq[1].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(1)", "(2)"]);
+  assert.deepStrictEqual(sq[2].items.filter((i) => i.kind === "sub").map((i) => i.marks), [2, 3]);
+  assert.deepStrictEqual(sq[3].items.find((i) => i.kind === "opts").items.map(plain).slice(-1), ["e) Brahmaputra"], "five-label rows a)–e)");
+  const srev = review(sm, { date: new Date("2026-09-19T06:00:00Z") });
+  assert.strictEqual(srev.blocking, false, "a map question without a map is a note, not a blocker (maps are printed separately)");
+  assert.ok(srev.markdown.includes("Q4: map question — no map in the file; the outline map is printed separately."), srev.markdown);
+  assert.ok(srev.markdown.includes("Adds up: A 10 + F 10 = 20"), srev.markdown);
+  assert.ok(!srev.markdown.includes("Duplicate question number"), srev.markdown);
+
+  // --- an English paper: table-of-contents lines, "Q1." with "A. / B." parts and "1. 2." items, options one per
+  //     line under a lettered part, two headings for one section, class in the file name != class in the header
+  const engDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VII\t\tSubject: English\t\tMarks: 20"),
+    p("Date: 01/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section A: Reading", { center: true }),
+    p("Section B: Grammar and Writing", { center: true }),
+    p("Section A: Reading (10 marks)", { center: true, bold: true }),
+    p("Q1. Read the passage and answer the questions:\t\t(1x5=5 m)"),
+    p("A. Where is the tree located?"),
+    p("(a) Delhi"), p("(b) Kolkata, near Howrah"), p("(c) Mumbai"), p("(d) Chennai"),
+    p("B. Complete the sentences."),
+    p("1. The tree is very _____."), p("2. It grows in _____."),
+    p("Q2. Do as directed:\t\t(5 m)"),
+    p("1. Write the plural of box."), p("2. Write the opposite of hot."),
+    p("Section B: I. Grammar (5 marks)", { center: true, bold: true }),
+    p("Q3. Fill in the blanks:\t\t(1x5=5 m)"),
+    p("1. He ___ a boy."), p("2. They ___ playing."),
+    p("Section B. II. Writing (5 marks)", { center: true, bold: true }),
+    p("Q4. Write a letter to your friend about your holidays.\t\t(5 m)"),
+  ] }] });
+  const engPath = path.join(dir, "English_VIII_HYE_2026_27.docx");
+  fs.writeFileSync(engPath, await Packer.toBuffer(engDoc));
+  const em = buildModel(await parseDocx(fs.readFileSync(engPath)), path.basename(engPath));
+  assert.deepStrictEqual(em.sections.map((x) => x.letter), ["A", "B", "B"], "table-of-contents lines dropped; second Section B heading kept as a part");
+  assert.strictEqual(em.sections[2].part, true);
+  const eq = em.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(eq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 5], [4, 5]], "1. items under Q1. are sub-parts");
+  assert.deepStrictEqual(eq[0].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(A)", "(B)", "(1)", "(2)"], "A./B. parts and 1./2. items keep their labels");
+  assert.deepStrictEqual(eq[0].items.find((i) => i.kind === "opts").items.map(plain), ["a) Delhi", "b) Kolkata, near Howrah", "c) Mumbai", "d) Chennai"], "options one per line under a lettered part");
+  const erev = review(em, { date: new Date("2026-09-20T06:00:00Z") });
+  assert.ok(erev.markdown.includes("Adds up: A 10 + B 10 = 20"), erev.markdown);
+  assert.ok(!erev.markdown.includes("Duplicate question number"), erev.markdown);
+  assert.ok(erev.markdown.includes("File name says Class VIII, the paper's header says Class VII"), erev.markdown);
+  assert.ok(!erev.markdown.includes("Subject code missing") && !erev.markdown.includes("General Instructions"), "no subject-code / instructions noise below Class IX: " + erev.markdown);
+  assert.strictEqual(erev.blocking, false);
+
+  // --- subject spellings teachers use
+  assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),
+    ["SocialScience", "SocialScience", "SocialScience", "SocialScience", "Maths", "English"]);
 
   // --- garbled Devanagari (a PDF converted back to Word) is detected; real Hindi is not
   const real = garbledDevanagari("देबू कौन सी कक्षा में पढ़ता था ? नैना की दादी के न आने का क्या कारण था ?");
