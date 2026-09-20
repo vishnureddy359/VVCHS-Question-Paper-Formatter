@@ -219,9 +219,15 @@ function ping() {
   if (trackerId) {
     try { tracker = DriveApp.getFileById(trackerId).getUrl(); } catch (err) { tracker = ""; }
   }
+  // Mail and Sheets need scopes the owner grants once by running this function in the editor;
+  // until then ping still answers, and says which scope is missing.
+  let mailQuota = null, mail = "ok";
+  try { mailQuota = MailApp.getRemainingDailyQuota(); } catch (err) { mail = "not authorized: run ping from the Apps Script editor once and accept the permissions"; }
+  let sheets = "ok";
+  try { SpreadsheetApp.getActive(); } catch (err) { sheets = "not authorized: run ping from the Apps Script editor once and accept the permissions"; }
   return {
     ok: true, folders: Object.keys(FOLDER_IDS), classFolders: true, tracker: tracker,
-    notify: true, coordinator: !!props.getProperty("COORDINATOR_EMAIL"), mailQuota: MailApp.getRemainingDailyQuota(),
+    notify: true, coordinator: !!props.getProperty("COORDINATOR_EMAIL"), mail: mail, mailQuota: mailQuota, sheets: sheets,
   };
 }
 
