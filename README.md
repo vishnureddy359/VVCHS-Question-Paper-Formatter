@@ -95,6 +95,11 @@ written as `(1x5 M)`, `(1 M)` or `अंक`, papers without section headings
 (primary classes), and matching exercises laid out as two columns. Devanagari
 runs are set in Mangal as the complex-script font.
 
+Formatted papers are Word files. Open them in Word or LibreOffice, or preview
+them in Drive without editing: opening a `.docx` in Google Docs and editing it
+there makes Google rewrite the file in its own format, which drops the page
+border and the tab layout, so the paper no longer follows the template.
+
 What the review note does and does not hold against a paper:
 
 - Blocking: marks that do not add up, a figure or diagram that the text refers

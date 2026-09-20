@@ -34,19 +34,28 @@ function sliceRuns(runs, from, to) {
 // Collapse whitespace across runs, trim both ends, drop zero-width chars.
 function normalizeRuns(runs) {
   const out = [];
-  let prevSpace = true;
+  let prevSpace = true, gap = 0;
+  // the separator just emitted (a single space) becomes a tab: it was a real tab, or a gap of three or more
+  // spaces, which teachers use to lay out columns ("a) Plains        i) Rajasthan")
+  const toTab = (text) => {
+    if (text.endsWith(" ")) return text.slice(0, -1) + "\t";
+    if (!text && out.length && out[out.length - 1].text.endsWith(" ")) out[out.length - 1].text = out[out.length - 1].text.slice(0, -1) + "\t";
+    return text;
+  };
   for (const r of runs) {
     let text = "";
     for (const ch of r.text.replace(/[\u200b\u200c\u200d\ufeff]/g, "")) {
       const isSpace = ch === " " || ch === "\t" || ch === "\u00a0";
       if (isSpace) {
+        gap += 1;
         if (!prevSpace) text += ch === "\t" ? "\t" : " ";
-        else if (ch === "\t" && text.endsWith(" ")) text = text.slice(0, -1) + "\t";
-        else if (ch === "\t" && !text && out.length && out[out.length - 1].text.endsWith(" ")) out[out.length - 1].text = out[out.length - 1].text.slice(0, -1) + "\t";
+        else if (ch === "\t" || gap === 3) text = toTab(text);
         prevSpace = true;
       }
-      else { text += ch; prevSpace = false; }
+      else { text += ch; prevSpace = false; gap = 0; }
     }
+    // a blank inside brackets "(   )" or "[   ]" is a space to tick, not a column gap: keep it as spaces
+    text = text.replace(/([(\[])\t/g, "$1      ").replace(/\t(?=[)\]])/g, "      ");
     if (text) out.push(cloneRun(r, text));
   }
   // trim trailing space
@@ -109,7 +118,10 @@ const RE = {
   altOnly: /^\(([AB])\)\s+/,
   mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
-  orTrail: /\s+OR\s*$/,
+  orTrail: /\s+OR\s*[.:]?\s*$/,
+  sectionBare: /^section\s*[:\-–—]\s*(?![a-h]\b)([A-Za-z\u0900-\u097F].*)$/i,
+  leadRule: /^[-=~]{5,}\s*(?=\S)/,
+  leadMark: /^(\d+(?:\.\d+)?)\s*M(?:arks?)?\b[\s:.\-]*(?=(?:Q\.?\s*)?\d{1,2}\s*[.)]?\s*[A-Za-z(])/i,
   optLabel: /(?<=^|\s)\(?([a-eA-E])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
   optNum: /(?<=^|\s)\(?([1-9])\)\s*/g,
   optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
@@ -367,7 +379,7 @@ class Builder {
     this.qDotStyle = false; // questions numbered "Q.1." — then a bare "1)" / "1." line inside a question is a sub-part
     this.subSeq = 0; // last numbered sub-part in the current question
     this.preamble = []; // entries before the first section
-    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0 };
+    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0, sectionLettered: [] };
     this.lastQuestionNumber = 0;
   }
 
@@ -419,6 +431,21 @@ class Builder {
     }
     if (!text) { if (line.shapes) this.noteShapes(line.shapes); return; }
 
+    // a rule of dashes with the heading after it on the same line: "--------  SECTION A- HISTORY"
+    const rule = RE.leadRule.exec(text);
+    if (rule) { runs = normalizeRuns(sliceRuns(runs, rule[0].length)); text = plain(runs); }
+
+    // a mark at the start of the next question's line: "2M  5) A. Who was …" — it belongs to the previous
+    // question when that one has none (the mark wrapped from its line), else to the question that follows
+    const lead = RE.leadMark.exec(text);
+    if (lead && this.section) {
+      const prevQ = this.entry && this.entry.kind === "question" ? this.entry : null;
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, lead[0].length)) }));
+      const q = prevQ && prevQ.marks == null ? prevQ : (this.entry && this.entry.kind === "question" && this.entry !== prevQ && this.entry.marks == null ? this.entry : null);
+      if (q) { q.marks = Number(lead[1]); q.marksSource = "paper"; }
+      return;
+    }
+
     // two questions glued on one line: "… 2M 12. Why are …"
     const qs = RE.qSplit.exec(text);
     if (qs && this.section) {
@@ -434,6 +461,15 @@ class Builder {
     const sec = RE.section.exec(text);
     if (sec && text.length < 90 && !/consists|carry|carries|contains/i.test(text)) {
       this.newSection(sec[1], sec[2].trim(), runs);
+      return;
+    }
+    // "SECTION: HISTORY" without a letter: it gets the next letter in sequence (noted in the review)
+    const secb = RE.sectionBare.exec(text);
+    if (secb && text.length < 90 && !/consists|carry|carries|contains/i.test(text)) {
+      const last = this.sections.length ? this.sections[this.sections.length - 1].letter : null;
+      const letter = last && /^[A-G]$/.test(last) ? String.fromCharCode(last.charCodeAt(0) + 1) : "A";
+      this.newSection(letter, secb[1].trim(), runs);
+      this.stats.sectionLettered.push(`"${text.trim()}" → Section ${letter}`);
       return;
     }
 
@@ -754,15 +790,21 @@ function postProcessEntry(e, section) {
     if (it.items) for (const o of it.items) dropWholeLineBold(o);
   }
   // 2. three or more consecutive "left<TAB>right" lines are a matching exercise: keep the columns
-  const isPair = (it) => it.kind === "cont" && /^[^\t]{1,40}\t[^\t]{1,40}$/.test(plain(it.runs));
+  // a sub-part "(a) Plains<TAB>i) Rajasthan" is a row of the same kind, its label going with the left column
+  const pairRuns = (it) => it.kind === "cont" ? it.runs : it.kind === "sub" && !it.nested && it.marks == null ? [{ text: it.label + " " }].concat(it.runs) : null;
+  const isPair = (it) => { const r = pairRuns(it); return !!r && /^[^\t]{1,40}\t[^\t]{1,40}$/.test(plain(r)); };
   for (let i = 0; i < items.length; i++) {
     if (!isPair(items[i])) { out.push(items[i]); continue; }
     let j = i;
     while (j < items.length && isPair(items[j])) j++;
-    if (j - i >= 3) {
+    // sub-part rows are a matching table only under a heading row ("Column A<TAB>Column B") or when the right
+    // column carries its own labels or blanks; "(A) Periyar<TAB>Madhya Pradesh" rows are MCQ options, left alone
+    const rightLabelled = (it) => /^\s*(?:\(?[a-z]\)|\(?[ivx]+\)|\d+\s*[.)]|[a-z]\.|_{3,})/i.test(plain(pairRuns(it)).split("\t")[1] || "");
+    const tableLike = items[i].kind === "cont" || items.slice(i, j).every((it) => it.kind === "cont" || rightLabelled(it));
+    if (j - i >= 3 && tableLike) {
       const rows = items.slice(i, j).map((it) => {
-        const t = plain(it.runs), cut = t.indexOf("\t");
-        return [normalizeRuns(sliceRuns(it.runs, 0, cut)), normalizeRuns(sliceRuns(it.runs, cut + 1))];
+        const r = pairRuns(it), t = plain(r), cut = t.indexOf("\t");
+        return [normalizeRuns(sliceRuns(r, 0, cut)), normalizeRuns(sliceRuns(r, cut + 1))];
       });
       out.push({ kind: "pairs", rows });
       i = j - 1;

@@ -81,7 +81,12 @@ const C = (runs, o = {}) => {
   });
 };
 
-// sub-part "(a) ..." with optional right-aligned mark
+// approximate width (twips) of a label in Times New Roman 11, to keep the text column clear of wide labels
+const labelWidth = (label) => [...label].reduce((w, c) => w + (/\d/.test(c) ? 110 : /[().]/.test(c) ? 73 : /[il]/.test(c) ? 61 : /[a-z]/.test(c) ? 98 : 150), 0);
+// text column for a question's sub-parts: 720 unless a label such as "(10)" or "(viii)" would run into it
+const subLeftFor = (labels) => Math.max(720, ...labels.map((l) => Math.ceil((360 + labelWidth(l) + 100) / 60) * 60));
+
+// sub-part "(a) ..." with optional right-aligned mark; the label sits at 360, the text at `left`
 const SUB = (label, runs, mark, o = {}) => {
   const left = o.left == null ? 720 : o.left;
   const right = o.right == null ? TEXT_W : o.right;
@@ -89,7 +94,7 @@ const SUB = (label, runs, mark, o = {}) => {
   if (mark) ch.push(TAB(), T(mark));
   return new Paragraph({
     spacing: { line: LINE, lineRule: "auto", after: o.after == null ? 0 : o.after },
-    indent: { left, hanging: 360 }, keepNext: o.keepNext, keepLines: true,
+    indent: { left, hanging: left - 360 }, keepNext: o.keepNext, keepLines: true,
     tabStops: [{ type: TabStopType.LEFT, position: left }, { type: TabStopType.RIGHT, position: right }],
     children: ch,
   });
@@ -107,6 +112,7 @@ const OPTS = (items, positions, o = {}) => {
   });
 };
 const OPT_POS = { 4: [2880, 5400, 7920], 3: [3720, 7080], 2: [5400] };
+const OPTS_GAP = 80; // twips after an option row when the next sub-question of the same question follows
 
 const OR = (o = {}) => P([{ text: "OR", bold: true }], { align: AlignmentType.CENTER, before: o.before == null ? 40 : o.before, after: o.after == null ? 40 : o.after, keepNext: true });
 
@@ -302,6 +308,7 @@ function renderEntry(e, section, showInferred) {
   const longEntry = textLen > 900 || items.length > 14;
   // in a long entry a paragraph still stays with the option row or image that belongs to it
   const keepWith = (idx) => { const nx = items[idx + 1]; return !!nx && (nx.kind === "opts" || nx.kind === "image" || nx.kind === "images" || nx.kind === "or"); };
+  const subLeft = subLeftFor(items.filter((x) => x.kind === "sub").map((x) => x.label));
   const renderItem = (it, idx, ctx) => {
     const last = idx === items.length - 1;
     const after = last ? 120 : undefined;
@@ -318,24 +325,24 @@ function renderEntry(e, section, showInferred) {
       case "sub": {
         // a nested label "(d) (i) …" would overflow the hanging indent, so it rides with the text
         const runs = it.nested ? [{ text: it.nested + " " }].concat(it.runs) : it.runs;
-        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: chain })];
+        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: chain, left: subLeft })];
       }
       case "opts": {
         const n = it.items.length;
         if (ctx.narrow && n > 2) {
           // beside a figure: two per line
           const rows = [];
-          for (let i = 0; i < n; i += 2) rows.push(OPTS(it.items.slice(i, i + 2), [Math.round(ctx.width / 2)], { after: i + 2 >= n ? after || 0 : 0, keepNext: i + 2 < n }));
+          for (let i = 0; i < n; i += 2) rows.push(OPTS(it.items.slice(i, i + 2), [Math.round(ctx.width / 2)], { after: i + 2 >= n ? after || OPTS_GAP : 0, keepNext: i + 2 < n }));
           return rows;
         }
         const longest = Math.max(...it.items.map((o) => plain(o).length));
         const perLine = n <= 2 ? (longest <= 45 ? 2 : 1) : n === 3 ? (longest <= 28 ? 3 : 1) : longest <= 22 ? 4 : longest <= 45 ? 2 : 1;
-        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : 40) : 0, keepNext: i < n - 1 || !last }));
+        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || !last }));
         const rows = [];
         for (let i = 0; i < n; i += perLine) {
           const chunk = it.items.slice(i, i + perLine);
           const isLastRow = i + perLine >= n;
-          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : 0) : 0, keepNext: !isLastRow || !last }));
+          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : OPTS_GAP) : 0, keepNext: !isLastRow || !last }));
         }
         return rows;
       }
