@@ -258,7 +258,8 @@ function subjectSlug(subject) {
   if (!subject) return "Paper";
   const s = subject.toLowerCase().replace(/[^a-z ]/g, " ").trim();
   if (/^math/.test(s)) return "Maths";
-  if (/social/.test(s) || /^s\.?s\.?t\b/.test(s) || /^s\.?o\.?\s*sci/.test(s) || /^sst\b/.test(s)) return "SocialScience";
+  // dots were turned into spaces above: "S.S.T" -> "s s t", "S.O. Science" -> "s o  science"
+  if (/social/.test(s) || /^s\s*s\s*t\b/.test(s) || /^s\s*o\s*sci/.test(s)) return "SocialScience";
   if (/^eng/.test(s)) return "English";
   if (/^sci/.test(s)) return "Science";
   if (/^hindi/.test(s) || /हिन्दी|हिंदी/.test(subject)) return "Hindi";

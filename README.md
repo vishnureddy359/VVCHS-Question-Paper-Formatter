@@ -11,7 +11,7 @@ talk to that bridge, never to Drive directly.
 
 | Path | Purpose |
 | --- | --- |
-| `qp.py` | Command-line client for the bridge: `list`, `download`, `upload`, `move`. |
+| `qp.py` | Command-line client for the bridge: `list`, `download`, `upload`, `move`, `ping`, `track`, `notify`. |
 | `formatter/` | Node package that turns one teacher `.docx` into the template layout plus a `_REVIEW.docx` note (Markdown on disk, Word in Drive). See `formatter/README.md`. |
 | `pipeline.py` | Runs the whole inbox through the formatter and routes results into the Drive folders. |
 | `pdf_to_docx.py` | Converts a PDF submission to a plain `.docx` (text rows, images, tables) so the formatter can read it. |
@@ -35,6 +35,7 @@ python3 pipeline.py run --dry-run    # download + format only; nothing changes i
 python3 pipeline.py run              # the real thing
 python3 pipeline.py run --only Maths_8th_PT1_2026-2027.docx
 python3 pipeline.py run --class-folders    # file into 2_Formatted/Class-VII etc. (needs the class-aware bridge)
+python3 pipeline.py run --class-folders --track --notify   # plus tracker-sheet row and teacher email per paper
 ```
 
 For every `.docx` or `.pdf` in `1_Inbox` the pipeline downloads it (a PDF is
@@ -60,6 +61,20 @@ With `--class-folders` every output goes into a `Class-<n>` sub-folder of
 `2_Formatted`, `3_Needs-Fixes` and `4_Archive` (created on first use), so a
 coordinator can open one class at a time. The inbox stays flat. This needs the
 bridge in `bridge/Code.gs`; see `bridge/README.md` for deploying it.
+
+With `--track` every processed paper (formatted, needs fixes, unreadable,
+recovered or errored) becomes a row in the Google Sheet **Question Papers -
+Tracker** next to the Drive folders: when it was processed, who uploaded it,
+the standard name and its class/subject/exam/session, the result, where it was
+filed, links to the formatted paper and the review note, the blocking issues
+in one line, the marks found against the header, and whether the teacher was
+emailed. With `--notify` the teacher who uploaded the paper gets an email: for
+a formatted paper, links to the paper and the note and how many points the
+note raises; for a paper that needs fixes, the blocking issues themselves and
+where to re-upload. The bridge picks the recipient from the file's owner in
+Drive and copies the coordinator when `COORDINATOR_EMAIL` is set on the
+script; see `bridge/README.md`. Neither flag can undo a filing: if the sheet
+or the mail fails, the paper stays where it was put and the run reports it.
 
 Names are `<Subject>_<Class>_<ExamCode>_<Session>` per the spec, the class in
 Roman numerals and the exam code taken from the paper's own header. If a name
