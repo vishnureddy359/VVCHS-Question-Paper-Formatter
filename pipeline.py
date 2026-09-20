@@ -100,6 +100,7 @@ SOURCE_LINE = re.compile(r"Source(?: file)?:\s*`?([^`\n\u00b7(]+?)`?\s*(?:\u00b7
 
 
 def retire_superseded(base: str, stem: str, needsfixes: dict, archive: dict, work: Path, result: dict) -> None:
+    archive_dest = dest("archive", base)
     """A paper that has just been formatted replaces an earlier attempt of the same paper that is still in
     3_Needs-Fixes (the teacher fixed it and re-uploaded): the old review note and the old original are
     parked in 4_Archive as *_superseded so the folder only shows papers that still need work."""
@@ -119,15 +120,27 @@ def retire_superseded(base: str, stem: str, needsfixes: dict, archive: dict, wor
         if src and src in needsfixes:
             p = Path(src)
             new = free_name(archive, p.stem + "_superseded", p.suffix)
-            mv = qp.move(needsfixes.pop(src), "archive", new)
+            mv = qp.move(needsfixes.pop(src), archive_dest, new)
             archive[mv["name"]] = mv["id"]
             result["notes"].append(f"earlier attempt {src} moved from 3_Needs-Fixes to 4_Archive as {mv['name']}")
             log(f"  -> superseded: {src} -> 4_Archive/{mv['name']}")
         new = free_name(archive, f"{stem}_REVIEW_superseded", Path(note).suffix)
-        mv = qp.move(needsfixes.pop(note), "archive", new)
+        mv = qp.move(needsfixes.pop(note), archive_dest, new)
         archive[mv["name"]] = mv["id"]
         result["notes"].append(f"{note} moved from 3_Needs-Fixes to 4_Archive as {mv['name']}")
         log(f"  -> superseded: {note} -> 4_Archive/{mv['name']}")
+
+
+CLASS_FOLDERS = False  # set by --class-folders: file outputs into formatted/Class-<n> etc. (needs the class-aware bridge)
+
+
+def dest(key: str, base: str | None) -> str:
+    """The folder to file into: the flat folder, or its Class-<n> sub-folder when class folders are on.
+    The class is the second token of the standard name (Subject_Class_Exam_Session)."""
+    if not CLASS_FOLDERS or not base:
+        return key
+    parts = base.split("_")
+    return qp.class_folder(key, parts[1] if len(parts) > 1 else None)
 
 
 def review_docx_for(review_md: Path) -> Path:
@@ -217,6 +230,7 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
         review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + PDF_NOTE, encoding="utf-8")
     result["name"] = base
     result["status"] = "needs-fixes" if blocking else "formatted"
+    fmt_dest, nf_dest, ar_dest = dest("formatted", base), dest("needsfixes", base), dest("archive", base)
     result["marks"] = summary.get("marks")
     result["headerMarks"] = summary.get("headerMarks")
     log(f"formatted {name} -> {base} ({'NEEDS FIXES' if blocking else 'OK'}, {summary['questions']} questions, {summary['marks']} marks)")
@@ -229,52 +243,52 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     # folder but the original never left the inbox. Retry only what is missing; never upload twice.
     # A review note with the same name but different content is someone else's file and is left alone.
     if blocking and f"{base}_REVIEW.docx" in needsfixes_names and same_review(needsfixes_names[f"{base}_REVIEW.docx"], review_path, work):
-        mv = qp.move(entry["id"], "needsfixes", None)
+        mv = qp.move(entry["id"], nf_dest, None)
         needsfixes_names[mv["name"]] = mv["id"]
         result["status"] = "recovered"
-        result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
+        result["moved"] = {"folder": nf_dest, "name": mv["name"]}
         result["notes"].append(f"{base}_REVIEW.docx was already in 3_Needs-Fixes; only the stalled move of the original was redone")
         log(f"  -> recovered: review already in 3_Needs-Fixes, original moved as {mv['name']}")
         return result
     if not blocking and f"{base}.docx" in formatted_names and (f"{base}_REVIEW.docx" not in formatted_names or same_review(formatted_names[f"{base}_REVIEW.docx"], review_path, work)):
         if f"{base}_REVIEW.docx" not in formatted_names:
-            rid = qp.upload("formatted", review_docx_for(review_path), f"{base}_REVIEW.docx", DOCX_MIME)
+            rid = qp.upload(fmt_dest, review_docx_for(review_path), f"{base}_REVIEW.docx", DOCX_MIME)
             formatted_names[f"{base}_REVIEW.docx"] = rid
-            result["uploaded"].append({"folder": "formatted", "name": f"{base}_REVIEW.docx", "id": rid})
+            result["uploaded"].append({"folder": fmt_dest, "name": f"{base}_REVIEW.docx", "id": rid})
         archived = free_name(archive_names, base + "_ORIGINAL", Path(name).suffix)
-        mv = qp.move(entry["id"], "archive", archived)
+        mv = qp.move(entry["id"], ar_dest, archived)
         archive_names[mv["name"]] = mv["id"]
         result["status"] = "recovered"
-        result["moved"] = {"folder": "archive", "name": mv["name"]}
+        result["moved"] = {"folder": ar_dest, "name": mv["name"]}
         result["notes"].append(f"{base}.docx was already in 2_Formatted; only the stalled move of the original was redone")
         log(f"  -> recovered: {base}.docx already in 2_Formatted, original archived as {mv['name']}")
         return result
 
     if blocking:
         review_name = free_name(needsfixes_names, base + "_REVIEW", ".docx")
-        rid = qp.upload("needsfixes", review_docx_for(review_path), review_name, DOCX_MIME)
+        rid = qp.upload(nf_dest, review_docx_for(review_path), review_name, DOCX_MIME)
         needsfixes_names[review_name] = rid
-        result["uploaded"].append({"folder": "needsfixes", "name": review_name, "id": rid})
+        result["uploaded"].append({"folder": nf_dest, "name": review_name, "id": rid})
         moved_name = free_name(needsfixes_names, Path(name).stem, Path(name).suffix)
-        mv = qp.move(entry["id"], "needsfixes", moved_name if moved_name != name else None)
+        mv = qp.move(entry["id"], nf_dest, moved_name if moved_name != name else None)
         needsfixes_names[mv["name"]] = mv["id"]
-        result["moved"] = {"folder": "needsfixes", "name": mv["name"]}
+        result["moved"] = {"folder": nf_dest, "name": mv["name"]}
         log(f"  -> 3_Needs-Fixes: {review_name}, original moved as {mv['name']}")
     else:
         stem, n = base, 2
         while f"{stem}.docx" in formatted_names or f"{stem}_REVIEW.docx" in formatted_names:
             stem = f"{base}_v{n}"; n += 1
         docx_name, review_name = f"{stem}.docx", f"{stem}_REVIEW.docx"
-        did = qp.upload("formatted", docx_path, docx_name, DOCX_MIME)
+        did = qp.upload(fmt_dest, docx_path, docx_name, DOCX_MIME)
         formatted_names[docx_name] = did
-        rid = qp.upload("formatted", review_docx_for(review_path), review_name, DOCX_MIME)
+        rid = qp.upload(fmt_dest, review_docx_for(review_path), review_name, DOCX_MIME)
         formatted_names[review_name] = rid
-        result["uploaded"].append({"folder": "formatted", "name": docx_name, "id": did})
-        result["uploaded"].append({"folder": "formatted", "name": review_name, "id": rid})
+        result["uploaded"].append({"folder": fmt_dest, "name": docx_name, "id": did})
+        result["uploaded"].append({"folder": fmt_dest, "name": review_name, "id": rid})
         archived = free_name(archive_names, stem + "_ORIGINAL", Path(name).suffix)
-        mv = qp.move(entry["id"], "archive", archived)
+        mv = qp.move(entry["id"], ar_dest, archived)
         archive_names[mv["name"]] = mv["id"]
-        result["moved"] = {"folder": "archive", "name": mv["name"]}
+        result["moved"] = {"folder": ar_dest, "name": mv["name"]}
         log(f"  -> 2_Formatted: {docx_name} + {review_name}; original archived as {mv['name']}")
         retire_superseded(base, stem, needsfixes_names, archive_names, work, result)
     return result
@@ -333,9 +347,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--only", help="process just this inbox file name")
     r.add_argument("--work", default="work", help="working directory (default: ./work)")
     r.add_argument("--json", action="store_true", help="print a JSON summary")
+    r.add_argument("--class-folders", action="store_true", help="file outputs into Class-<n> sub-folders (needs the class-aware bridge, see bridge/README.md)")
     a = p.parse_args(argv)
     try:
         if a.cmd == "run":
+            global CLASS_FOLDERS
+            CLASS_FOLDERS = bool(a.class_folders)
             return cmd_run(a)
     except qp.BridgeError as e:
         print(f"pipeline: error: {e}", file=sys.stderr)
