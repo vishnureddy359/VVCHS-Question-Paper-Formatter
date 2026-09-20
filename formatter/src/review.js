@@ -252,6 +252,9 @@ function review(model, opts = {}) {
   const c = f.changes;
   c.push(`Text kept verbatim; spacing, indents, fonts and page setup reset to the template.`);
   if (model.naming.base + ".docx" !== model.source) c.push(`File renamed ${model.source} → ${model.naming.base}.docx.`);
+  if (model.stats.sectionLettered && model.stats.sectionLettered.length) {
+    c.push(`Section heading without a letter given the next letter: ${model.stats.sectionLettered.join("; ")}. Confirm.`);
+  }
   if (model.stats.degreeFixed.length) {
     const qs = [...new Set(model.stats.degreeFixed)];
     c.push(`Degree signs: "o" after a number set as ° in ${qs.join(", ")}.`);

@@ -81,7 +81,12 @@ const C = (runs, o = {}) => {
   });
 };
 
-// sub-part "(a) ..." with optional right-aligned mark
+// approximate width (twips) of a label in Times New Roman 11, to keep the text column clear of wide labels
+const labelWidth = (label) => [...label].reduce((w, c) => w + (/\d/.test(c) ? 110 : /[().]/.test(c) ? 73 : /[il]/.test(c) ? 61 : /[a-z]/.test(c) ? 98 : 150), 0);
+// text column for a question's sub-parts: 720 unless a label such as "(10)" or "(viii)" would run into it
+const subLeftFor = (labels) => Math.max(720, ...labels.map((l) => Math.ceil((360 + labelWidth(l) + 100) / 60) * 60));
+
+// sub-part "(a) ..." with optional right-aligned mark; the label sits at 360, the text at `left`
 const SUB = (label, runs, mark, o = {}) => {
   const left = o.left == null ? 720 : o.left;
   const right = o.right == null ? TEXT_W : o.right;
@@ -89,7 +94,7 @@ const SUB = (label, runs, mark, o = {}) => {
   if (mark) ch.push(TAB(), T(mark));
   return new Paragraph({
     spacing: { line: LINE, lineRule: "auto", after: o.after == null ? 0 : o.after },
-    indent: { left, hanging: 360 }, keepNext: o.keepNext, keepLines: true,
+    indent: { left, hanging: left - 360 }, keepNext: o.keepNext, keepLines: true,
     tabStops: [{ type: TabStopType.LEFT, position: left }, { type: TabStopType.RIGHT, position: right }],
     children: ch,
   });
@@ -302,6 +307,7 @@ function renderEntry(e, section, showInferred) {
   const longEntry = textLen > 900 || items.length > 14;
   // in a long entry a paragraph still stays with the option row or image that belongs to it
   const keepWith = (idx) => { const nx = items[idx + 1]; return !!nx && (nx.kind === "opts" || nx.kind === "image" || nx.kind === "images" || nx.kind === "or"); };
+  const subLeft = subLeftFor(items.filter((x) => x.kind === "sub").map((x) => x.label));
   const renderItem = (it, idx, ctx) => {
     const last = idx === items.length - 1;
     const after = last ? 120 : undefined;
@@ -318,7 +324,7 @@ function renderEntry(e, section, showInferred) {
       case "sub": {
         // a nested label "(d) (i) …" would overflow the hanging indent, so it rides with the text
         const runs = it.nested ? [{ text: it.nested + " " }].concat(it.runs) : it.runs;
-        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: chain })];
+        return [SUB(it.label, runs, markText(it.marks), { right, after, keepNext: chain, left: subLeft })];
       }
       case "opts": {
         const n = it.items.length;

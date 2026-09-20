@@ -249,6 +249,54 @@ async function makeFixture() {
   assert.ok(!erev.markdown.includes("Subject code missing") && !erev.markdown.includes("General Instructions"), "no subject-code / instructions noise below Class IX: " + erev.markdown);
   assert.strictEqual(erev.blocking, false);
 
+  // --- SST-style quirks: a dashed rule before the heading, a heading without a letter, columns laid out with
+  //     runs of spaces, "(   )" tick blanks, a mark at the start of the next question's line, "OR." glued on,
+  //     and ten roman sub-parts (the text column must clear the "(viii)" label)
+  const qDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VIII\t\tSubject: SO. SCIENCE\t\tMarks: 16"),
+    p("Date: 13/10/2026\t\tRoll No.: ______\t\tTime: 3 hours"),
+    p("----------------------------------------------------------------   SECTION A- HISTORY (6 MARKS)"),
+    p("1. Vitthal Temple is located at______\t\t1M"),
+    p("     A) Konark       B) Hampi       C) Delhi        D) Agra"),
+    p("2. Match the following:\t\t3M"),
+    p("Column A                         Column B"),
+    p("a) Plains                           i) Rajasthan"),
+    p("b) Thar Desert                 ii) Highest peak in the world"),
+    p("c) Mt. Everest                 iii) Alluvial soil"),
+    p("3. Put a tick if the sentence is correct:\t\t2M"),
+    p("a) India has 28 states. (     )"),
+    p("b) Plains are flat. (     )"),
+    p("SECTION: GEOGRAPHY\t10M"),
+    p("4. What is latitude?\t\t1M"),
+    p("2M  5)A. Who was the last emperor of the Nanda Dynasty? OR."),
+    p("5)B. What was the impact of iron?\t\t2M"),
+    p("6. Define the following:\t\t7M"),
+    ...["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"].map((r, i) => p(`${r}) Term ${i + 1}`)),
+  ] }] });
+  const qPath = path.join(dir, "SST_VIII_HYE_2026-27.docx");
+  fs.writeFileSync(qPath, await Packer.toBuffer(qDoc));
+  const qm = buildModel(await parseDocx(fs.readFileSync(qPath)), path.basename(qPath));
+  assert.deepStrictEqual(qm.sections.map((x) => x.letter), ["A", "B"], "dashed rule stripped before the heading; bare 'SECTION:' gets the next letter");
+  assert.ok(qm.sections[0].rest.startsWith("HISTORY") && qm.sections[1].rest.startsWith("GEOGRAPHY"), JSON.stringify(qm.sections.map((x) => x.rest)));
+  const qq = qm.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(qq.map((q) => [q.number, q.marks]), [[1, 1], [2, 3], [3, 2], [4, 1], [5, 2], [5, 2], [6, 7]], "leading '2M' goes to the question that follows when the previous one has its mark");
+  const qpairs = qq[1].items.find((i) => i.kind === "pairs");
+  assert.ok(qpairs && qpairs.rows.length === 4, "space-aligned match columns kept as two columns: " + JSON.stringify(qq[1].items.map((i) => i.kind)));
+  assert.deepStrictEqual(qpairs.rows[1].map(plain), ["(a) Plains", "i) Rajasthan"]);
+  const tick = qq[2].items.filter((i) => i.kind === "sub").map((i) => plain(i.runs));
+  assert.ok(tick.length === 2 && tick.every((t) => /\(\s+\)$/.test(t) && !t.includes("\t")), "tick blanks stay as spaces: " + JSON.stringify(tick));
+  assert.ok(qq[4].items.some((i) => i.kind === "or"), "'OR.' glued to the line becomes an OR line: " + JSON.stringify(qq[4].items.map((i) => i.kind)));
+  assert.strictEqual(qq[6].items.filter((i) => i.kind === "sub").length, 10);
+  const qrev = review(qm, { date: new Date("2026-09-20T06:00:00Z") });
+  assert.ok(qrev.markdown.includes("Adds up: A 6 + B 10 = 16"), qrev.markdown);
+  assert.ok(qrev.markdown.includes("Section heading without a letter"), qrev.markdown);
+  assert.strictEqual(qrev.blocking, false, qrev.markdown);
+  const qres = await formatPaper(qPath, { out: path.join(dir, "out5"), date: new Date("2026-09-20T06:00:00Z") });
+  const qxml = await (await JSZip.loadAsync(fs.readFileSync(qres.docx))).file("word/document.xml").async("string");
+  assert.ok(qxml.includes('w:pos="900"'), "text column moves right of a wide label such as (viii)");
+
   // --- subject spellings teachers use
   assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),
     ["SocialScience", "SocialScience", "SocialScience", "SocialScience", "Maths", "English"]);
