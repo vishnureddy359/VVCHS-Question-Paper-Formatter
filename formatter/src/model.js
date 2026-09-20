@@ -221,6 +221,9 @@ function parseHeader(lines, filename) {
   const fn = /^([A-Za-z]+)_([A-Za-z0-9]+)_([A-Za-z0-9]+)_(\d{4}[-_]\d{2,4})/.exec(filename || "");
   h.fromFile = fn ? { subject: fn[1], cls: normalizeClass(fn[2]), exam: fn[3].toUpperCase(), session: fn[4].replace("_", "-") } : null;
   if (!h.cls && h.fromFile) { h.cls = h.fromFile.cls; h.missing.push("class"); }
+  // "Subject: ________" left blank in the master copy counts as missing
+  if (h.subject && /^[\s_.\-]*$/.test(h.subject)) h.subject = null;
+  if (h.cls && /^[\s_.\-]*$/.test(h.cls)) h.cls = null;
   if (!h.subject && h.fromFile) { h.subject = h.fromFile.subject; h.missing.push("subject"); }
   if (!h.session && h.fromFile) h.session = h.fromFile.session.replace(/^(\d{4})-(\d{2})(\d{2})$/, "$1-$3");
   if (!h.exam) h.missing.push("exam name");
@@ -255,7 +258,7 @@ function subjectSlug(subject) {
   if (!subject) return "Paper";
   const s = subject.toLowerCase().replace(/[^a-z ]/g, " ").trim();
   if (/^math/.test(s)) return "Maths";
-  if (/social/.test(s) || /^s\.?s\.?t\b/.test(s)) return "SocialScience";
+  if (/social/.test(s) || /^s\.?s\.?t\b/.test(s) || /^s\.?o\.?\s*sci/.test(s) || /^sst\b/.test(s)) return "SocialScience";
   if (/^eng/.test(s)) return "English";
   if (/^sci/.test(s)) return "Science";
   if (/^hindi/.test(s) || /हिन्दी|हिंदी/.test(subject)) return "Hindi";

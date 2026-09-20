@@ -12,7 +12,7 @@ const path = require("path");
 const JSZip = require("jszip");
 const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, AlignmentType } = require("docx");
 const { parseDocx } = require("../src/parse");
-const { buildModel, plain, garbledDevanagari } = require("../src/model");
+const { buildModel, plain, garbledDevanagari, subjectSlug } = require("../src/model");
 const { review } = require("../src/review");
 const { formatPaper } = require("../src/index");
 
@@ -248,6 +248,10 @@ async function makeFixture() {
   assert.ok(erev.markdown.includes("File name says Class VIII, the paper's header says Class VII"), erev.markdown);
   assert.ok(!erev.markdown.includes("Subject code missing") && !erev.markdown.includes("General Instructions"), "no subject-code / instructions noise below Class IX: " + erev.markdown);
   assert.strictEqual(erev.blocking, false);
+
+  // --- subject spellings teachers use
+  assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),
+    ["SocialScience", "SocialScience", "SocialScience", "SocialScience", "Maths", "English"]);
 
   // --- garbled Devanagari (a PDF converted back to Word) is detected; real Hindi is not
   const real = garbledDevanagari("देबू कौन सी कक्षा में पढ़ता था ? नैना की दादी के न आने का क्या कारण था ?");
