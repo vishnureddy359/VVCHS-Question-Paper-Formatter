@@ -112,7 +112,11 @@ const RE = {
   genInstr: /^general\s+instructions?\s*[:\-]?\s*$/i,
   genInstrInline: /^general\s+instructions?\s*[:\-]?\s*(.+)$/i,
   section: /^section\s*[-–—:]?\s*([a-h])\b\s*[-–—:.]?\s*(.*)$/i,
-  qDot: /^(?:(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*|Q\.?\s*([IVX]{1,4})(?:[.):]|\s)\s*)/,
+  qDot: /^(?:(?:Q\s*\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*|Q\.?\s*([IVX]{1,4})(?:[.):]|\s)\s*)/,
+  // "Choose the correct answer. (1x5=5m) 1) A lion lives in a ___": the first sub-part glued after the marks
+  subSplit: /(\(\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+\s*=\s*\d+\s*(?:marks?|m)?\s*\))\s+(?=\(?\d{1,2}\)\s*\S)/i,
+  // "Section D (15 marks) Q. 8. Answer …": a question start glued to a section heading
+  sectionGlue: /\s(?=Q\s*\.?\s*\d{1,2}\s*[.):])/i,
   qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
   qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
   altOnly: /^\(([AB])\)\s+/,
@@ -454,12 +458,27 @@ class Builder {
       this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), images: [], num: null }));
       return;
     }
+    const ss = RE.subSplit.exec(text);
+    if (ss && this.section && (RE.qDot.test(text) || RE.qNum.test(text))) {
+      const cut = ss.index + ss[1].length;
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, 0, cut)) }));
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), images: [], num: null }));
+      return;
+    }
     if (line.shapes) this.noteShapes(line.shapes);
     if (line.math) this.stats.mathObjects += line.math;
 
-    // section heading
+    // section heading (a question start glued to it goes on as its own line)
     const sec = RE.section.exec(text);
-    if (sec && text.length < 90 && !/consists|carry|carries|contains/i.test(text)) {
+    const secGlue = sec && RE.sectionGlue.exec(sec[2]);
+    const headText = secGlue ? text.slice(0, text.length - sec[2].length + secGlue.index) : text;
+    if (sec && headText.length < 90 && !/consists|carry|carries|contains/i.test(headText)) {
+      if (secGlue) {
+        const cut = headText.length;
+        this.newSection(sec[1], sec[2].slice(0, secGlue.index).trim(), normalizeRuns(sliceRuns(runs, 0, cut)));
+        this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), num: null }));
+        return;
+      }
       this.newSection(sec[1], sec[2].trim(), runs);
       return;
     }
@@ -510,8 +529,12 @@ class Builder {
     // in a paper that numbers its questions "Q.1." the items under a question are numbered "1. 2. 3." or "1) 2) 3)"
     // and start again at 1 in every question: such a line is a numbered sub-part, not a question. Only a bare
     // number that continues the question count (the teacher dropped the "Q") still opens a question.
-    const numSub = this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
-      && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1);
+    // likewise a "4) valency" line inside Q28 of a "27. 28." paper: a small number well below the question count
+    // written with ")" is the right column of a match table or an item list, not question 4 again
+    const backwards = bareMatch != null && !this.qDotStyle && this.entry && this.entry.kind === "question"
+      && /^\d{1,2}\s*\)/.test(text) && bareNum < this.lastQuestionNumber && this.lastQuestionNumber - bareNum >= 5;
+    const numSub = (this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
+      && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1)) || backwards;
     if (qm) { number = qm[1] != null ? Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))) : romanToInt(qm[2]); cut = qm[0].length; this.qDotStyle = true; }
     else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
     else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
@@ -877,6 +900,15 @@ function sumSubs(subs) {
 
 function inferMarks(model) {
   for (const s of model.sections) {
+    // "(20 * 1 = 20)" is count × per for some teachers and per × count for others: when the section holds
+    // several questions and their number matches the first factor rather than the second, swap the two
+    const x = s.marksExpr;
+    if (x && x.per && x.count && x.per !== x.count) {
+      const qs = s.entries.filter((e) => e.kind === "question" && e.number != null);
+      const n = new Set(qs.map((e) => e.number)).size;
+      const unmarked = qs.every((e) => e.marks == null);
+      if (unmarked && n >= 2 && n === x.per && n !== x.count) { [x.per, x.count] = [x.count, x.per]; x.swapped = true; }
+    }
     const per = s.marksExpr && s.marksExpr.per;
     let prevQ = null;
     for (const e of s.entries) {

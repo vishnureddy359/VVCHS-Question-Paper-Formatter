@@ -2,8 +2,9 @@
 """
 pipeline.py — run the VVCHS question-paper pipeline against the Drive folders.
 
-For every .docx or .pdf in 1_Inbox:
-  1. download it through the bridge (qp.py); a PDF is first converted to .docx with pdf_to_docx.py
+For every .docx, .doc or .pdf in 1_Inbox:
+  1. download it through the bridge (qp.py); a PDF is first converted to .docx with pdf_to_docx.py,
+     a .doc with LibreOffice (soffice)
   2. run the formatter (formatter/src/index.js) -> <Name>.docx + <Name>_REVIEW.md
   3. route the result:
        no blocking issues  -> <Name>.docx + <Name>_REVIEW.docx to 2_Formatted, original to 4_Archive as <Name>_ORIGINAL.docx
@@ -58,6 +59,28 @@ PDF_NOTE = ("## PDF source\n- The paper arrived as a PDF and was converted to Wo
 
 def is_pdf(entry: dict) -> bool:
     return entry["name"].lower().endswith(".pdf") or entry["mimeType"] == PDF_MIME
+
+
+DOC_MIME = "application/msword"
+DOC_NOTE = ("## Word 97 source\n- The paper arrived as an old-format .doc file and was converted to .docx before formatting. "
+            "Check figures and tables against the original; saving the paper as .docx in Word gives a better result.\n")
+
+
+def is_doc(entry: dict) -> bool:
+    return entry["name"].lower().endswith(".doc") or entry["mimeType"] == DOC_MIME
+
+
+def doc_to_docx(src: Path) -> Path:
+    """Convert a .doc to .docx with LibreOffice (soffice must be on PATH)."""
+    if not shutil.which("soffice"):
+        raise RuntimeError("LibreOffice (soffice) is not installed, so a .doc file cannot be converted; ask for the .docx")
+    profile = src.parent / ".lo-profile"
+    r = subprocess.run(["soffice", "--headless", f"-env:UserInstallation=file://{profile.resolve()}", "--convert-to", "docx",
+                        "--outdir", str(src.parent), str(src)], capture_output=True, text=True, timeout=180)
+    out = src.with_suffix(".docx")
+    if r.returncode != 0 or not out.is_file():
+        raise RuntimeError(f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout).strip()[-300:]}")
+    return out
 
 
 def log(msg: str) -> None:
@@ -205,6 +228,17 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     src = qp.download(entry["id"], src_dir / name)
     log(f"downloaded {name} ({src.stat().st_size} bytes)")
     from_pdf = is_pdf(entry)
+    from_doc = is_doc(entry)
+    if from_doc:
+        try:
+            src = doc_to_docx(src)
+        except RuntimeError as e:
+            result["status"] = "error"
+            result["notes"].append(str(e))
+            log(f"ERROR converting {name}: {e}")
+            return result
+        log(f"converted .doc -> .docx ({src.stat().st_size} bytes)")
+        result["converted_from_doc"] = True
     if from_pdf:
         from pdf_to_docx import convert, UnreadablePdfError  # imported here so the docx-only path needs no PyMuPDF
         converted = src_dir / (Path(name).stem + ".docx")
@@ -232,6 +266,8 @@ def process(entry: dict, work: Path, formatted: dict, needsfixes: dict, archive:
     blocking = bool(summary["blocking"])
     if from_pdf:
         review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + PDF_NOTE, encoding="utf-8")
+    if from_doc:
+        review_path.write_text(review_path.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + DOC_NOTE, encoding="utf-8")
     result["name"] = base
     result["status"] = "needs-fixes" if blocking else "formatted"
     result["review_md"] = str(review_path)
@@ -483,7 +519,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     inbox = qp.list_files("inbox")
-    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f)]
+    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f) or is_doc(f)]
     others = [f["name"] for f in inbox if f not in papers]
     if args.only:
         papers = [f for f in papers if f["name"] == args.only]
@@ -492,7 +528,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
     log(f"inbox: {len(papers)} paper(s) to process" + (f", {len(others)} other file(s) left alone" if others else ""))
     for o in others:
-        log(f"  skipping (not .docx/.pdf): {o}")
+        log(f"  skipping (not .docx/.doc/.pdf): {o}")
 
     listing = lambda key: {f["name"]: f["id"] for f in qp.list_files(key)} if not args.dry_run else {}
     formatted_names, needsfixes_names, archive_names = listing("formatted"), listing("needsfixes"), listing("archive")

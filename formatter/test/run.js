@@ -297,6 +297,47 @@ async function makeFixture() {
   const qxml = await (await JSZip.loadAsync(fs.readFileSync(qres.docx))).file("word/document.xml").async("string");
   assert.ok(qxml.includes('w:pos="900"'), "text column moves right of a wide label such as (viii)");
 
+  // --- Science-style quirks: "(20 * 1=20)" written count-first, "Q .1." with a space, a question glued to a
+  //     section heading, the first sub-part glued after the marks expression, and match-table leftovers "4) …"
+  const scDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VII\t\tSubject: Science\t\tMarks: 20"),
+    p("Date: 6/10/2026\t\tRoll No.: ______\t\tTime: 3 hours"),
+    p("Section A (3 marks) (3 * 1=3)"),
+    p("21. Which gas do plants absorb?"),
+    p("a) Oxygen    b) Carbon dioxide    c) Nitrogen    d) Helium"),
+    p("22. What is respiration?"),
+    p("23. Match the following –"),
+    p("a) The number of atoms in a molecule\t1) valency"),
+    p("b) The flow of electricity\t2) atomicity"),
+    p("3) electric current"),
+    p("4) electric circuit"),
+    p("Section B (7 marks) Q. 24. Answer in brief. (any 1) (7x1=7m)"),
+    p("1) Explain the water cycle."),
+    p("2) Explain the carbon cycle."),
+    p("Section C (10 marks)"),
+    p("Q .25. Choose the correct answer. (1x2=2m) 1) A lion lives in a ________."),
+    p("a) den    b) burrow    c) hole    d) kennel"),
+    p("2) The food factory of a plant is the ________."),
+    p("a) fruit    b) flower    c) leaf    d) root"),
+    p("Q .26. Fill in the blanks. (1x8=8m)"),
+    p("1) Fish breathe through their ______."),
+  ] }] });
+  const scPath = path.join(dir, "SCIENCE_VII_HYE_2026-27.docx");
+  fs.writeFileSync(scPath, await Packer.toBuffer(scDoc));
+  const scm = buildModel(await parseDocx(fs.readFileSync(scPath)), path.basename(scPath));
+  assert.deepStrictEqual(scm.sections.map((x) => x.letter), ["A", "B", "C"]);
+  assert.strictEqual(scm.sections[1].rest, "(7 marks)", "the question glued to the Section B heading is split off");
+  const scq = scm.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
+  assert.deepStrictEqual(scq.map((q) => q.number), [21, 22, 23, 24, 25, 26], "3)/4) rows of the match table are not questions; Q .25. is a question");
+  assert.deepStrictEqual(scq.map((q) => q.marks), [1, 1, 1, 7, 2, 8], "3 * 1 read as three questions of one mark; any-1 of 7; per-part products");
+  assert.strictEqual(scm.sections[0].marksExpr.per, 1, "count-first expression is re-oriented");
+  assert.deepStrictEqual(scq[4].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(1)", "(2)"], "sub-part glued after the marks product becomes its own line");
+  const screv = review(scm, { date: new Date("2026-09-21T06:00:00Z") });
+  assert.ok(screv.markdown.includes("Adds up: A 3 + B 7 + C 10 = 20"), screv.markdown);
+  assert.strictEqual(screv.blocking, false, screv.markdown);
+
   // --- subject spellings teachers use
   assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),
     ["SocialScience", "SocialScience", "SocialScience", "SocialScience", "Maths", "English"]);
