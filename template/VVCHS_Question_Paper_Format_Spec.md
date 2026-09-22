@@ -23,6 +23,7 @@ Reference: English_IX_HYE_2026-27.pdf (Word-generated). First applied to Maths_I
 - Section heading: SECTION A – <TITLE> (<marks>) — TNR Bold 14, centred, underlined, spacing before 200 / after 120. Marks expression stays inside the heading in parentheses.
 - Section instruction line ("Questions 1–18: …") — TNR Bold 11, left.
 - Question: number bold ("1."), text regular; indent left 360 / hanging 360; keepNext + keepLines; spacing after 40.
+- Umbrella question (a stem that only introduces its sub-parts, e.g. "1. Answer any 4 out of the given 6 questions:", "Fill in the blanks:", "Match the following:"): the stem is bold as well, like a sub-heading. A question that is itself answerable ("6. What is a hyperlink?") stays regular. (Added 22 Sep 2026.)
 - Sub-parts (a)/(i): label at 360, text at 720 (indent left 720 / hanging 360).
 - MCQ options, 4 on one line: indent 360, tab stops 2880 / 5400 / 7920; spacing after 120 closes the question.
 - Options beside a figure: 2 per line.

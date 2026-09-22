@@ -296,6 +296,10 @@ async function makeFixture() {
   const qres = await formatPaper(qPath, { out: path.join(dir, "out5"), date: new Date("2026-09-20T06:00:00Z") });
   const qxml = await (await JSZip.loadAsync(fs.readFileSync(qres.docx))).file("word/document.xml").async("string");
   assert.ok(qxml.includes('w:pos="900"'), "text column moves right of a wide label such as (viii)");
+  // umbrella stems are bold, answerable questions are not
+  const runOf = (needle) => (qxml.match(new RegExp("<w:r>(?:(?!</w:r>).)*?" + needle + "(?:(?!</w:r>).)*?</w:r>", "s")) || [""])[0];
+  assert.ok(/<w:b(?: w:val="(?:1|true)")?\/>/.test(runOf("Match the following")), "'Match the following:' with sub-parts is bold: " + runOf("Match the following"));
+  assert.ok(!/<w:b(?: w:val="(?:1|true)")?\/>/.test(runOf("Vitthal Temple")), "an answerable question stem stays regular");
 
   // --- Science-style quirks: "(20 * 1=20)" written count-first, "Q .1." with a space, a question glued to a
   //     section heading, the first sub-part glued after the marks expression, and match-table leftovers "4) …"

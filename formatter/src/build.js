@@ -315,6 +315,20 @@ function questionLabel(e) {
   return e.number != null ? `${e.number}.` : "";
 }
 
+// True for a question whose first line only introduces its sub-parts: an instruction-like verb, no question mark,
+// and at least two sub-parts (or a matching table, or a table of MCQs under "Answer any …") below it.
+const UMBRELLA_VERBS = /^(answer|attempt|choose|select|tick|fill|match|read|complete|do as directed|solve|unscramble|rearrange|arrange|identify|observe|name|define|give|state|write|put|mark|circle|classify|categori[sz]e|find|correct|rewrite|change|convert|expand|frame|make|pick|underline|very short|short|long|case[- ]based|hots|application)\b/i;
+function umbrellaStem(e) {
+  const stem = e.items.find((x) => x.kind === "stem");
+  if (!stem) return false;
+  const t = plain(stem.runs).trim();
+  if (!t || t.length > 140 || /\?/.test(t) || !UMBRELLA_VERBS.test(t.replace(/^\(?[A-Za-z]\)\s*/, ""))) return false;
+  const subs = e.items.filter((x) => x.kind === "sub").length;
+  const pairs = e.items.some((x) => x.kind === "pairs");
+  const table = e.items.some((x) => x.kind === "table" || x.kind === "tables");
+  return subs >= 2 || pairs || (table && /^(answer|attempt|match|complete|fill)/i.test(t));
+}
+
 // Render one entry (question or note) into an array of Paragraph/Table.
 function renderEntry(e, section, showInferred) {
   const out = [];
@@ -340,7 +354,12 @@ function renderEntry(e, section, showInferred) {
     switch (it.kind) {
       case "stem": {
         const runs = e.alt ? [{ text: `(${e.alt}) ` }].concat(it.runs) : it.runs;
-        if (isQ && e.number != null) return [Q(questionLabel(e), runs, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
+        if (isQ && e.number != null) {
+          // a stem that only introduces sub-parts ("Answer any 4 of the given 6 questions:", "Fill in the blanks:")
+          // is a sub-heading and is set bold like the number; a question that is itself answerable stays regular
+          const stemRuns = idx === 0 && umbrellaStem(e) ? runs.map((r) => Object.assign({}, r, { bold: true })) : runs;
+          return [Q(questionLabel(e), stemRuns, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
+        }
         if (e.center) return [INSTR(runs, { align: AlignmentType.CENTER, after })];
         return [INSTR(runs, { after: last ? 80 : 40, keepNext: chain })];
       }
