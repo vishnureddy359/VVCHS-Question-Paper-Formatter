@@ -141,7 +141,8 @@ def call(action: str, **fields) -> dict:
         except BridgeError as e:
             msg = str(e)
             # Apps Script's redirect target answers 404/5xx now and then for a file it serves fine a moment later
-            transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5") or msg.startswith("HTTP 404")
+            # "POST a JSON body" is the bridge's doGet answer: Google's redirect occasionally drops the POST body
+            transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5") or msg.startswith("HTTP 404") or msg == "POST a JSON body"
             if not transient or attempt == RETRIES:
                 raise
             last = e

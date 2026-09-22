@@ -241,6 +241,15 @@ function TABLE_ROW(tables) {
 
 // ---------- header block ----------
 const HDR_TABS = [{ type: TabStopType.LEFT, position: 3600 }, { type: TabStopType.LEFT, position: 8640 }];
+// a long subject ("INFORMATION TECHNOLOGY (402)") would push "Marks:" past the last tab stop and wrap the line:
+// slide both stops left so the three fields still sit on one line (bold TNR 12 capitals run ~150 twips a character)
+function hdrTabsFor(subject) {
+  const width = 1050 + subject.length * 150; // "Subject: " label plus the text
+  const marksStop = Math.min(8640, TEXT_W - 2100);
+  const subjectStop = Math.min(3600, marksStop - width - 200);
+  if (subjectStop >= 3600) return HDR_TABS;
+  return [{ type: TabStopType.LEFT, position: Math.max(2200, subjectStop) }, { type: TabStopType.LEFT, position: marksStop }];
+}
 
 function headerBlock(model, totals) {
   const h = model.header;
@@ -263,7 +272,7 @@ function headerBlock(model, totals) {
       children: [...logo, new TextRun({ text: "VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", font: FONT, size: 32, bold: true })] }),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 },
       children: [new TextRun({ text: exam, font: FONT, size: 28, bold: true })] }),
-    new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 }, tabStops: HDR_TABS,
+    new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 }, tabStops: hdrTabsFor(subject),
       children: [T(`Class: ${h.cls || "____"}`, { bold: true, size: 24 }), TAB(), T(`Subject: ${subject}`, { bold: true, size: 24 }), TAB(), T(`Marks: ${marks} marks`, { bold: true, size: 24 })] }),
     new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 100 }, tabStops: HDR_TABS,
       indent: { left: -152, firstLine: 152, right: -228 },

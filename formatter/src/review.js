@@ -7,7 +7,9 @@
 
 const { plain, normalizeClass, subjectSlug, romanToInt, topSubs } = require("./model");
 
-const FIGURE_WORDS = /\b(figure|fig\.|diagram|adjoining|picture|image|graph shown|in the given figure|the given diagram|on the (?:given |outline |political |physical )?map|outline map|in the map|map of india|map of the world)\b/i;
+// "picture" and "image" only count when the text points at one ("in the given picture", "identify the image
+// shown"): computer papers talk about images and pictures as subject matter
+const FIGURE_WORDS = /\b(figure|fig\.|diagram|adjoining|graph shown|in the given figure|the given diagram|(?:in|observe|identify|look at|see|study|label|name|from)\s+the\s+(?:given\s+|following\s+|above\s+|below\s+)?(?:picture|image|photo(?:graph)?)|(?:picture|image|photo(?:graph)?)s?\s+(?:given|shown|below|above|alongside)|on the (?:given |outline |political |physical )?map|outline map|in the map|map of india|map of the world)\b/i;
 const DRAW_WORDS = /\b(draw|construct|sketch|plot|represent .* on)\b/i;
 
 function qLabel(e) {
