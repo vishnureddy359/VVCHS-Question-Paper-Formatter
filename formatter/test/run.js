@@ -338,6 +338,37 @@ async function makeFixture() {
   assert.ok(screv.markdown.includes("Adds up: A 3 + B 7 + C 10 = 20"), screv.markdown);
   assert.strictEqual(screv.blocking, false, screv.markdown);
 
+  // --- CBSE IT-style section: "Answer any 3 out of the given 5 questions … (3x2=6 m)" groups give the questions
+  //     that follow their marks and count their stated total; a trailing empty single-column table row is dropped
+  const itDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: IX\t\tSubject: Information Technology (402)\t\tMarks: 14"),
+    p("Date: 15/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section B (Objective Type Questions) (14 marks)"),
+    p("Answer any 3 out of the given 5 questions on Employability Skills. (3x2=6 m)"),
+    p("Q6. What is the purpose of asking questions?"), p("Q7. List three practices for hygiene."), p("Q8. What is a hyperlink?"),
+    p("Q9. What is a database?"), p("Q10. What benefits do businesses gain from IT?"),
+    p("Answer any 2 out of the given 3 questions in 50 – 80 words each. (2x4=8m)"),
+    p("Q11. Discuss personal hygiene and social interactions."), p("Q12. Explain formal and informal greetings."), p("Q13. Describe typing ergonomics."),
+    new Table({ rows: [
+      new TableRow({ children: [new TableCell({ children: [p("Q14. Write a program that prints the hypotenuse.")] })] }),
+      new TableRow({ children: [new TableCell({ children: [p("")] })] }),
+    ] }),
+  ] }] });
+  const itPath = path.join(dir, "IT_IX_HYE_2026-27.docx");
+  fs.writeFileSync(itPath, await Packer.toBuffer(itDoc));
+  const itm = buildModel(await parseDocx(fs.readFileSync(itPath)), path.basename(itPath));
+  const itq = itm.sections[0].entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(itq.map((q) => [q.number, q.marks]), [[6, 2], [7, 2], [8, 2], [9, 2], [10, 2], [11, 4], [12, 4], [13, 4]], "each group's per-question mark reaches the questions under it");
+  assert.strictEqual(itm.sections[0].entries.filter((e) => e.kind === "note" && e.group).length, 2, "both instruction lines stay as grouped notes");
+  const itrev = review(itm, { date: new Date("2026-09-22T06:00:00Z") });
+  assert.ok(itrev.markdown.includes("Adds up: B 14 = 14") || itrev.markdown.includes("Questions total 14"), itrev.markdown);
+  assert.strictEqual(itrev.blocking, false, itrev.markdown);
+  assert.strictEqual(itm.stats.emptyTablesDropped, 1, "trailing empty row of the single-column table dropped");
+  const lastTable = itm.sections[0].entries.flatMap((e) => e.items).find((i) => i.kind === "table");
+  assert.ok(lastTable && lastTable.table.rows.length === 1, "the Q14 row is kept");
+
   // --- subject spellings teachers use
   assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),
     ["SocialScience", "SocialScience", "SocialScience", "SocialScience", "Maths", "English"]);

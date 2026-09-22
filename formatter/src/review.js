@@ -46,6 +46,21 @@ function groupQuestions(section) {
   return groups;
 }
 
+// A part's questions, with those under an "Answer any N … (NxM=T)" instruction gathered into one unit that
+// counts T towards the section whatever number of questions the paper offers to choose from.
+function sectionUnits(part) {
+  const units = [];
+  let cur = null;
+  for (const e of part.entries) {
+    if (e.kind === "note") { cur = e.group ? { kind: "grp", group: e.group, qs: [] } : null; if (cur) units.push(cur); continue; }
+    if (e.kind !== "question") continue;
+    const target = cur ? cur.qs : units;
+    const last = target[target.length - 1];
+    if (last && last.kind === "q" && last.number === e.number) last.parts.push(e); else target.push({ kind: "q", number: e.number, parts: [e] });
+  }
+  return units;
+}
+
 function groupMarks(g) {
   const ms = g.parts.map((p) => p.marks).filter((m) => m != null);
   return ms.length ? Math.max(...ms) : null;
@@ -74,13 +89,21 @@ function review(model, opts = {}) {
   }
   for (const ms of merged) {
     const s = ms.parts[0];
-    const groups = ms.parts.flatMap(groupQuestions);
+    const units = ms.parts.flatMap(sectionUnits);
+    const groups = units.flatMap((u) => (u.kind === "q" ? [u] : u.qs));
+    const hasChoiceGroups = units.some((u) => u.kind === "grp");
     const missing = [];
     let sum = 0;
-    for (const g of groups) {
-      const m = groupMarks(g);
-      if (m == null) { missing.push("Q" + g.number); allKnown = false; }
-      else sum += m;
+    for (const u of units) {
+      const qs = u.kind === "q" ? [u] : u.qs;
+      let usum = 0, complete = true;
+      for (const g of qs) {
+        const m = groupMarks(g);
+        if (m == null) { missing.push("Q" + g.number); allKnown = false; complete = false; }
+        else usum += m;
+      }
+      // "any 4 of 6": the group is worth its stated total, not the sum of all six
+      sum += u.kind === "grp" && complete && u.group.total != null && qs.length >= u.group.count ? u.group.total : usum;
     }
     const totals = ms.parts.map((p) => (p.marksExpr ? p.marksExpr.total : null));
     const expected = totals.every((t) => t != null) ? totals.reduce((a, t) => a + t, 0) : (totals.find((t) => t != null) ?? null);
@@ -102,7 +125,7 @@ function review(model, opts = {}) {
     } else if (expected == null && missing.length) {
       f.marks.push(`Section ${s.letter}: ${missing.join(", ")} carr${missing.length === 1 ? "ies" : "y"} no mark and the section heading gives no total.`);
     }
-    if (ms.parts.length === 1 && s.marksExpr && s.marksExpr.count && groups.length !== s.marksExpr.count) {
+    if (ms.parts.length === 1 && !hasChoiceGroups && s.marksExpr && s.marksExpr.count && groups.length !== s.marksExpr.count) {
       f.marks.push(`Section ${s.letter}: heading says ${s.marksExpr.count} questions, paper has ${groups.length}.`);
     }
     for (const g of groups) for (const p of g.parts) {
@@ -257,6 +280,7 @@ function review(model, opts = {}) {
   if (model.stats.sectionLettered && model.stats.sectionLettered.length) {
     c.push(`Section heading without a letter given the next letter: ${model.stats.sectionLettered.join("; ")}. Confirm.`);
   }
+  if (model.stats.emptyTablesDropped) c.push(`${model.stats.emptyTablesDropped} empty table${model.stats.emptyTablesDropped > 1 ? "s" : ""} or trailing empty row${model.stats.emptyTablesDropped > 1 ? "s" : ""} (answer boxes) dropped.`);
   if (model.stats.degreeFixed.length) {
     const qs = [...new Set(model.stats.degreeFixed)];
     c.push(`Degree signs: "o" after a number set as ° in ${qs.join(", ")}.`);

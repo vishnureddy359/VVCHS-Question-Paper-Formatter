@@ -117,17 +117,18 @@ def _post_once(url: str, body: bytes) -> bytes:
         raise BridgeError(f"cannot reach bridge: {getattr(e, 'reason', e)}") from e
 
 
-def call(action: str, **fields) -> dict:
+def call(action: str, retries: int = RETRIES, **fields) -> dict:
     """POST one action to the bridge and return the decoded JSON reply.
 
     Transient failures (network errors, or Google's HTML error page instead of
-    JSON) are retried with backoff. Writes are retried too: 'upload' fails
-    cleanly on a duplicate name, and 'move' is idempotent.
+    JSON) are retried with backoff. 'move' is idempotent so it is retried too;
+    'upload' passes retries=1 and checks the folder itself, because a lost
+    answer does not mean the upload did not happen.
     """
     url, token = _config()
     body = json.dumps({"token": token, "action": action, **fields}).encode("utf-8")
     last: Exception | None = None
-    for attempt in range(1, RETRIES + 1):
+    for attempt in range(1, retries + 1):
         try:
             raw = _post_once(url, body)
             try:
@@ -143,7 +144,7 @@ def call(action: str, **fields) -> dict:
             # Apps Script's redirect target answers 404/5xx now and then for a file it serves fine a moment later
             # "POST a JSON body" is the bridge's doGet answer: Google's redirect occasionally drops the POST body
             transient = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5") or msg.startswith("HTTP 404") or msg == "POST a JSON body"
-            if not transient or attempt == RETRIES:
+            if not transient or attempt == retries:
                 raise
             last = e
             time.sleep(2 ** attempt)
@@ -171,7 +172,20 @@ def upload(folder: str, path: Path, name: str | None = None, mime: str | None = 
     name = name or path.name
     mime = mime or mimetypes.guess_type(name)[0] or "application/octet-stream"
     b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    return call("upload", folder=folder, name=name, mimeType=mime, base64=b64)["id"]
+    for attempt in range(1, RETRIES + 1):
+        try:
+            return call("upload", retries=1, folder=folder, name=name, mimeType=mime, base64=b64)["id"]
+        except BridgeError as e:
+            msg = str(e)
+            lost = msg.startswith("cannot reach bridge") or msg.startswith("bridge did not return JSON") or msg.startswith("HTTP 5") or msg.startswith("HTTP 404") or msg == "POST a JSON body"
+            if not lost or attempt == RETRIES:
+                raise
+            # the answer was lost, not necessarily the upload: if the file is there now, that is our upload
+            time.sleep(2 ** attempt)
+            found = [f for f in list_files(folder) if f["name"] == name and not (f.get("sub") and "/" not in folder)]
+            if found:
+                return found[0]["id"]
+    raise BridgeError("upload failed")
 
 
 def move(file_id: str, folder: str, name: str | None = None) -> dict:

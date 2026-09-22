@@ -176,9 +176,23 @@ function IMAGE_LINE(img, keepNext = true) {
 }
 
 // ---------- data tables ----------
+// "(i)" on a line of its own inside a table cell joins the text on the next line
+function joinLabelParas(paras) {
+  const out = [];
+  for (let i = 0; i < paras.length; i++) {
+    const p = paras[i], next = paras[i + 1];
+    const t = plain(p.runs).trim();
+    if (next && /^\(?(?:[ivx]{1,4}|[a-e]|\d{1,2})[).]$/i.test(t) && !(p.images && p.images.length) && plain(next.runs).trim()) {
+      out.push(Object.assign({}, next, { runs: [{ text: t + " " }].concat(next.runs) }));
+      i++;
+    } else out.push(p);
+  }
+  return out;
+}
+
 function cellParas(cell, center, cellW = 4000) {
   const maxImgPt = Math.max(40, cellW / 20 - 12);
-  const paras = cell.paragraphs.filter((p) => p.runs.length || (p.images && p.images.length)).map((p) => {
+  const paras = joinLabelParas(cell.paragraphs.filter((p) => p.runs.length || (p.images && p.images.length))).map((p) => {
     const children = textRuns(p.runs.map((r) => Object.assign({}, r, { text: r.text.replace(/\uFFFC/g, "") })));
     for (const img of p.images || []) { const { w, h } = imgSize(img, maxImgPt); children.push(IMG(img, w, h)); }
     return new Paragraph({
@@ -346,12 +360,14 @@ function renderEntry(e, section, showInferred) {
         }
         const longest = Math.max(...it.items.map((o) => plain(o).length));
         const perLine = n <= 2 ? (longest <= 45 ? 2 : 1) : n === 3 ? (longest <= 28 ? 3 : 1) : longest <= 22 ? 4 : longest <= 45 ? 2 : 1;
-        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || !last }));
+        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || chain }));
         const rows = [];
         for (let i = 0; i < n; i += perLine) {
           const chunk = it.items.slice(i, i + perLine);
           const isLastRow = i + perLine >= n;
-          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : OPTS_GAP) : 0, keepNext: !isLastRow || !last }));
+          // in a long question the last option row must not chain to the next sub-question, or Word carries the whole
+          // question (and the page-1 header with it) over to the next page
+          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : OPTS_GAP) : 0, keepNext: !isLastRow || chain }));
         }
         return rows;
       }
