@@ -38,9 +38,9 @@ python3 pipeline.py run --class-folders    # file into 2_Formatted/Class-VII etc
 python3 pipeline.py run --class-folders --track --notify   # plus tracker-sheet row and teacher email per paper
 ```
 
-For every `.docx` or `.pdf` in `1_Inbox` the pipeline downloads it (a PDF is
-first converted to Word with `pdf_to_docx.py`, and the review note says so),
-runs the formatter and then:
+For every `.docx`, `.doc` or `.pdf` in `1_Inbox` the pipeline downloads it (a
+PDF is first converted to Word with `pdf_to_docx.py`, an old `.doc` with
+LibreOffice, and the review note says so), runs the formatter and then:
 
 - **no blocking issues**: uploads `<Name>.docx` and `<Name>_REVIEW.docx` to
   `2_Formatted` and moves the original to `4_Archive` as `<Name>_ORIGINAL.docx`;
@@ -79,7 +79,9 @@ or the mail fails, the paper stays where it was put and the run reports it.
 Names are `<Subject>_<Class>_<ExamCode>_<Session>` per the spec, the class in
 Roman numerals and the exam code taken from the paper's own header. If a name
 is already taken in the target folder the pipeline appends `_v2`, `_v3`, and
-so on. Files that are neither `.docx` nor `.pdf` are left alone. Because
+so on. Files that are none of `.docx`, `.doc` or `.pdf` are left alone. A
+`.doc` needs `soffice` (LibreOffice) on the machine; without it the file stays
+in the inbox and the run reports why. Because
 processed originals always leave the inbox, re-running is safe.
 
 PDFs are second best: a PDF has no paragraphs, so the converter rebuilds them

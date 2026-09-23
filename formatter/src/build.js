@@ -176,9 +176,23 @@ function IMAGE_LINE(img, keepNext = true) {
 }
 
 // ---------- data tables ----------
+// "(i)" on a line of its own inside a table cell joins the text on the next line
+function joinLabelParas(paras) {
+  const out = [];
+  for (let i = 0; i < paras.length; i++) {
+    const p = paras[i], next = paras[i + 1];
+    const t = plain(p.runs).trim();
+    if (next && /^\(?(?:[ivx]{1,4}|[a-e]|\d{1,2})[).]$/i.test(t) && !(p.images && p.images.length) && plain(next.runs).trim()) {
+      out.push(Object.assign({}, next, { runs: [{ text: t + " " }].concat(next.runs) }));
+      i++;
+    } else out.push(p);
+  }
+  return out;
+}
+
 function cellParas(cell, center, cellW = 4000) {
   const maxImgPt = Math.max(40, cellW / 20 - 12);
-  const paras = cell.paragraphs.filter((p) => p.runs.length || (p.images && p.images.length)).map((p) => {
+  const paras = joinLabelParas(cell.paragraphs.filter((p) => p.runs.length || (p.images && p.images.length))).map((p) => {
     const children = textRuns(p.runs.map((r) => Object.assign({}, r, { text: r.text.replace(/\uFFFC/g, "") })));
     for (const img of p.images || []) { const { w, h } = imgSize(img, maxImgPt); children.push(IMG(img, w, h)); }
     return new Paragraph({
@@ -241,6 +255,15 @@ function TABLE_ROW(tables) {
 
 // ---------- header block ----------
 const HDR_TABS = [{ type: TabStopType.LEFT, position: 3600 }, { type: TabStopType.LEFT, position: 8640 }];
+// a long subject ("INFORMATION TECHNOLOGY (402)") would push "Marks:" past the last tab stop and wrap the line:
+// slide both stops left so the three fields still sit on one line (bold TNR 12 capitals run ~150 twips a character)
+function hdrTabsFor(subject) {
+  const width = 1050 + subject.length * 150; // "Subject: " label plus the text
+  const marksStop = Math.min(8640, TEXT_W - 2100);
+  const subjectStop = Math.min(3600, marksStop - width - 200);
+  if (subjectStop >= 3600) return HDR_TABS;
+  return [{ type: TabStopType.LEFT, position: Math.max(2200, subjectStop) }, { type: TabStopType.LEFT, position: marksStop }];
+}
 
 function headerBlock(model, totals) {
   const h = model.header;
@@ -263,7 +286,7 @@ function headerBlock(model, totals) {
       children: [...logo, new TextRun({ text: "VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", font: FONT, size: 32, bold: true })] }),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 },
       children: [new TextRun({ text: exam, font: FONT, size: 28, bold: true })] }),
-    new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 }, tabStops: HDR_TABS,
+    new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 0 }, tabStops: hdrTabsFor(subject),
       children: [T(`Class: ${h.cls || "____"}`, { bold: true, size: 24 }), TAB(), T(`Subject: ${subject}`, { bold: true, size: 24 }), TAB(), T(`Marks: ${marks} marks`, { bold: true, size: 24 })] }),
     new Paragraph({ spacing: { line: LINE, lineRule: "auto", before: 0, after: 100 }, tabStops: HDR_TABS,
       indent: { left: -152, firstLine: 152, right: -228 },
@@ -292,6 +315,20 @@ function questionLabel(e) {
   return e.number != null ? `${e.number}.` : "";
 }
 
+// True for a question whose first line only introduces its sub-parts: an instruction-like verb, no question mark,
+// and at least two sub-parts (or a matching table, or a table of MCQs under "Answer any …") below it.
+const UMBRELLA_VERBS = /^(answer|attempt|choose|select|tick|fill|match|read|complete|do as directed|solve|unscramble|rearrange|arrange|identify|observe|name|define|give|state|write|put|mark|circle|classify|categori[sz]e|find|correct|rewrite|change|convert|expand|frame|make|pick|underline|very short|short|long|case[- ]based|hots|application)\b/i;
+function umbrellaStem(e) {
+  const stem = e.items.find((x) => x.kind === "stem");
+  if (!stem) return false;
+  const t = plain(stem.runs).trim();
+  if (!t || t.length > 140 || /\?/.test(t) || !UMBRELLA_VERBS.test(t.replace(/^\(?[A-Za-z]\)\s*/, ""))) return false;
+  const subs = e.items.filter((x) => x.kind === "sub").length;
+  const pairs = e.items.some((x) => x.kind === "pairs");
+  const table = e.items.some((x) => x.kind === "table" || x.kind === "tables");
+  return subs >= 2 || pairs || (table && /^(answer|attempt|match|complete|fill)/i.test(t));
+}
+
 // Render one entry (question or note) into an array of Paragraph/Table.
 function renderEntry(e, section, showInferred) {
   const out = [];
@@ -317,7 +354,12 @@ function renderEntry(e, section, showInferred) {
     switch (it.kind) {
       case "stem": {
         const runs = e.alt ? [{ text: `(${e.alt}) ` }].concat(it.runs) : it.runs;
-        if (isQ && e.number != null) return [Q(questionLabel(e), runs, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
+        if (isQ && e.number != null) {
+          // a stem that only introduces sub-parts ("Answer any 4 of the given 6 questions:", "Fill in the blanks:")
+          // is a sub-heading and is set bold like the number; a question that is itself answerable stays regular
+          const stemRuns = idx === 0 && umbrellaStem(e) ? runs.map((r) => Object.assign({}, r, { bold: true })) : runs;
+          return [Q(questionLabel(e), stemRuns, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
+        }
         if (e.center) return [INSTR(runs, { align: AlignmentType.CENTER, after })];
         return [INSTR(runs, { after: last ? 80 : 40, keepNext: chain })];
       }
@@ -337,12 +379,14 @@ function renderEntry(e, section, showInferred) {
         }
         const longest = Math.max(...it.items.map((o) => plain(o).length));
         const perLine = n <= 2 ? (longest <= 45 ? 2 : 1) : n === 3 ? (longest <= 28 ? 3 : 1) : longest <= 22 ? 4 : longest <= 45 ? 2 : 1;
-        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || !last }));
+        if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || chain }));
         const rows = [];
         for (let i = 0; i < n; i += perLine) {
           const chunk = it.items.slice(i, i + perLine);
           const isLastRow = i + perLine >= n;
-          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : OPTS_GAP) : 0, keepNext: !isLastRow || !last }));
+          // in a long question the last option row must not chain to the next sub-question, or Word carries the whole
+          // question (and the page-1 header with it) over to the next page
+          rows.push(OPTS(chunk, (OPT_POS[perLine] || OPT_POS[4]).slice(0, chunk.length - 1), { after: isLastRow ? (last ? 120 : OPTS_GAP) : 0, keepNext: !isLastRow || chain }));
         }
         return rows;
       }

@@ -106,13 +106,17 @@ const RE = {
   subject: /\b(?:subject|sub\.?|विषय)\s*[:\-–]?\s*([^\t]+?)\s*(?=\bmarks?\b|\bmax|\bm\.?m\.?|\broll|\bname|\btime|$)/i,
   nameLine: /^\s*(?:name|student'?s? name|नाम)\s*[:\-]/i,
   marks: /\b(?:max(?:imum)?\.?\s*)?marks?\s*[:\-]?\s*(\d+)/i,
-  date: /\bdate\s*[:\-]?\s*([0-9]{1,2}[\/.\-][0-9]{1,2}[\/.\-][0-9]{2,4}|_+|[0-9]{1,2}\s+\w+\s+[0-9]{4})?/i,
+  date: /\bdate\s*[:\-]?\s*([0-9]{1,2}\s*[\/.\-]\s*[0-9]{1,2}\s*[\/.\-]\s*[0-9]{2,4}|_+|[0-9]{1,2}\s+\w+\s+[0-9]{4})?/i,
   time: /\b(?:time|समय)\s*[:\-]?\s*([0-9½.:]+\s*(?:hours?|hrs?\.?|h|minutes?|mins?)?(?:\s*[0-9]+\s*(?:minutes?|mins?))?)/i,
   roll: /\broll\s*no/i,
   genInstr: /^general\s+instructions?\s*[:\-]?\s*$/i,
   genInstrInline: /^general\s+instructions?\s*[:\-]?\s*(.+)$/i,
   section: /^section\s*[-–—:]?\s*([a-h])\b\s*[-–—:.]?\s*(.*)$/i,
-  qDot: /^(?:(?:Q\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*|Q\.?\s*([IVX]{1,4})(?:[.):]|\s)\s*)/,
+  qDot: /^(?:(?:Q\s*\.?|प्र\.?|प्रश्न|प्र०)\s*([0-9०-९]{1,2})\s*[.):]?\s*|Q\.?\s*([IVX]{1,4})(?:[.):]|\s)\s*)/,
+  // "Choose the correct answer. (1x5=5m) 1) A lion lives in a ___": the first sub-part glued after the marks
+  subSplit: /(\(\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+\s*=\s*\d+\s*(?:marks?|m)?\s*\))\s+(?=\(?\d{1,2}\)\s*\S)/i,
+  // "Section D (15 marks) Q. 8. Answer …": a question start glued to a section heading
+  sectionGlue: /\s(?=Q\s*\.?\s*\d{1,2}\s*[.):])/i,
   qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
   qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
   altOnly: /^\(([AB])\)\s+/,
@@ -129,9 +133,9 @@ const RE = {
   subDot: /^([a-l])\.(?:\s+(?=[A-Za-z(])|(?=[A-Z][a-z]))/i,
   subNum: /^\(?(\d{1,2})\)\s*/,
   subNumDot: /^(\d{1,2})\s*[.)]\s*(?!\d)/,
-  subRomanDot: /^((?:i{1,3}|iv|v|vi{0,3}|ix|x))\.\s+(?=[A-Za-z("'“])/i,
+  subRomanDot: /^((?:i{1,3}|iv|v|vi{0,3}|ix|x))\s*\.\s+(?=[A-Za-z("'“])/i,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
-  direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q)/i,
+  direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q|answer any\b)/i,
   titleLine: /^(assertion|reason|case[\s-]*study|section|passage|multiple[\s-]*choice|mcq)/i,
   qSplit: /\s(\d+\s*M(?:arks?)?)\s+(?=(?:Q\.?\s*)?\d{1,2}\s*[.)]\s*[A-Za-z(])/i,
   endLine: /^[*\-_=~\s]*(end|all the best|best of luck)?[*\-_=~\s]*$/i,
@@ -379,7 +383,7 @@ class Builder {
     this.qDotStyle = false; // questions numbered "Q.1." — then a bare "1)" / "1." line inside a question is a sub-part
     this.subSeq = 0; // last numbered sub-part in the current question
     this.preamble = []; // entries before the first section
-    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0, sectionLettered: [] };
+    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0, sectionLettered: [], emptyTablesDropped: 0 };
     this.lastQuestionNumber = 0;
   }
 
@@ -454,12 +458,27 @@ class Builder {
       this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), images: [], num: null }));
       return;
     }
+    const ss = RE.subSplit.exec(text);
+    if (ss && this.section && (RE.qDot.test(text) || RE.qNum.test(text))) {
+      const cut = ss.index + ss[1].length;
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, 0, cut)) }));
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), images: [], num: null }));
+      return;
+    }
     if (line.shapes) this.noteShapes(line.shapes);
     if (line.math) this.stats.mathObjects += line.math;
 
-    // section heading
+    // section heading (a question start glued to it goes on as its own line)
     const sec = RE.section.exec(text);
-    if (sec && text.length < 90 && !/consists|carry|carries|contains/i.test(text)) {
+    const secGlue = sec && RE.sectionGlue.exec(sec[2]);
+    const headText = secGlue ? text.slice(0, text.length - sec[2].length + secGlue.index) : text;
+    if (sec && headText.length < 90 && !/consists|carry|carries|contains/i.test(headText)) {
+      if (secGlue) {
+        const cut = headText.length;
+        this.newSection(sec[1], sec[2].slice(0, secGlue.index).trim(), normalizeRuns(sliceRuns(runs, 0, cut)));
+        this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), num: null }));
+        return;
+      }
       this.newSection(sec[1], sec[2].trim(), runs);
       return;
     }
@@ -510,8 +529,12 @@ class Builder {
     // in a paper that numbers its questions "Q.1." the items under a question are numbered "1. 2. 3." or "1) 2) 3)"
     // and start again at 1 in every question: such a line is a numbered sub-part, not a question. Only a bare
     // number that continues the question count (the teacher dropped the "Q") still opens a question.
-    const numSub = this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
-      && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1);
+    // likewise a "4) valency" line inside Q28 of a "27. 28." paper: a small number well below the question count
+    // written with ")" is the right column of a match table or an item list, not question 4 again
+    const backwards = bareMatch != null && !this.qDotStyle && this.entry && this.entry.kind === "question"
+      && /^\d{1,2}\s*\)/.test(text) && bareNum < this.lastQuestionNumber && this.lastQuestionNumber - bareNum >= 5;
+    const numSub = (this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
+      && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1)) || backwards;
     if (qm) { number = qm[1] != null ? Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))) : romanToInt(qm[2]); cut = qm[0].length; this.qDotStyle = true; }
     else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
     else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
@@ -616,6 +639,16 @@ class Builder {
     }
     if (RE.direction.test(text) || (isCentered && text.length < 80 && !this.entry) || (!this.entry)) {
       const n = this.newNote(runs, { center: isCentered && text.length < 80, marks });
+      // "Answer any 4 out of the given 6 questions … (4x2=8m)": the questions that follow are worth `per` each
+      // and the group counts `total` towards the section, however many of them the paper lists
+      const ge = parseMarksExpr(text);
+      if (ge && ge.per && ge.count && /\banswer\b/i.test(text)) {
+        // "any 3 … (3x2=6)": the factor equal to the "any N" count is the count, whichever side it was written on
+        const anyN = /\bany\s+(\d+)\b/i.exec(text);
+        const per = anyN && Number(anyN[1]) === ge.per && Number(anyN[1]) !== ge.count ? ge.count : ge.per;
+        const count = anyN && Number(anyN[1]) === ge.per && Number(anyN[1]) !== ge.count ? ge.per : ge.count;
+        n.group = { per, count, total: ge.total };
+      }
       finish();
       return n;
     }
@@ -687,6 +720,14 @@ class Builder {
   }
 
   addTable(table) {
+    // an empty table (a leftover answer box) is dropped; a trailing empty row of a single-column table likewise
+    const hasContent = (c) => (c.paragraphs || []).some((p) => plain(p.runs || []).trim() || (p.images && p.images.length));
+    let rows = table.rows;
+    if (!rows.some((r) => r.some(hasContent))) { this.stats.emptyTablesDropped += 1; return; }
+    if (rows.every((r) => r.length === 1)) {
+      while (rows.length > 1 && !rows[rows.length - 1].some(hasContent)) rows = rows.slice(0, -1);
+      if (rows.length !== table.rows.length) { this.stats.emptyTablesDropped += 1; table = Object.assign({}, table, { rows }); }
+    }
     this.push({ kind: "table", table });
   }
 
@@ -737,7 +778,7 @@ class Builder {
     }
     // Move leading notes of a section (before its first question) into section.instr for tidier rendering.
     for (const s of this.sections) {
-      while (s.entries.length && s.entries[0].kind === "note" && s.entries[0].items.every((x) => x.kind === "stem" || x.kind === "cont")) {
+      while (s.entries.length && s.entries[0].kind === "note" && !s.entries[0].group && s.entries[0].items.every((x) => x.kind === "stem" || x.kind === "cont")) {
         const n = s.entries.shift();
         for (const x of n.items) s.instr.push(x.runs);
       }
@@ -877,7 +918,22 @@ function sumSubs(subs) {
 
 function inferMarks(model) {
   for (const s of model.sections) {
+    // "(20 * 1 = 20)" is count × per for some teachers and per × count for others: when the section holds
+    // several questions and their number matches the first factor rather than the second, swap the two
+    const x = s.marksExpr;
+    if (x && x.per && x.count && x.per !== x.count) {
+      const qs = s.entries.filter((e) => e.kind === "question" && e.number != null);
+      const n = new Set(qs.map((e) => e.number)).size;
+      const unmarked = qs.every((e) => e.marks == null);
+      if (unmarked && n >= 2 && n === x.per && n !== x.count) { [x.per, x.count] = [x.count, x.per]; x.swapped = true; }
+    }
     const per = s.marksExpr && s.marksExpr.per;
+    // questions under an "Answer any N … (NxM=T)" instruction are worth M each unless they say otherwise
+    let grp = null;
+    for (const e of s.entries) {
+      if (e.kind === "note") { if (e.group) grp = e.group; continue; }
+      if (e.kind === "question" && grp && e.marks == null && !e.items.some((x) => x.kind === "sub" && x.marks != null)) { e.marks = grp.per; e.marksSource = "group instruction"; }
+    }
     let prevQ = null;
     for (const e of s.entries) {
       if (e.kind !== "question") continue;
