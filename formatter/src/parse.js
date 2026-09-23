@@ -257,7 +257,8 @@ class DocxParser {
     const pPr = child(pNode, "w:pPr");
     const runs = [], images = [];
     let shapes = 0, math = 0;
-    const base = runProps(pPr && child(pPr, "w:rPr"), {});
+    // w:pPr/w:rPr formats only the paragraph mark (the pilcrow), never the text: runs start from nothing
+    const base = {};
     const pushText = (text, props) => {
       if (!text) return;
       const last = runs[runs.length - 1];
@@ -333,9 +334,17 @@ class DocxParser {
       const cells = [];
       for (const tc of children(tr, "w:tc")) {
         const paragraphs = [];
+        // a nested table is flattened into the cell's paragraphs; `nested` remembers where it sat, so a box
+        // table that only frames a question can be unwrapped with its inner table intact
+        const nested = [];
         for (const k of kids(tc)) {
           if (tagOf(k) === "w:p") paragraphs.push(this.parseParagraph(k));
-          else if (tagOf(k) === "w:tbl") paragraphs.push(...this.parseTable(k).rows.flat().flatMap((c) => c.paragraphs));
+          else if (tagOf(k) === "w:tbl") {
+            const inner = this.parseTable(k);
+            const flat = inner.rows.flat().flatMap((c) => c.paragraphs);
+            nested.push({ at: paragraphs.length, count: flat.length, table: inner });
+            paragraphs.push(...flat);
+          }
         }
         const tcPr = child(tc, "w:tcPr");
         const span = tcPr ? Number(attr(tcPr, "w:gridSpan") || 1) : 1;
@@ -345,7 +354,7 @@ class DocxParser {
           const vals = ["w:top", "w:left", "w:bottom", "w:right"].map((t) => attr(b, t)).filter((v) => v !== undefined);
           cellBorders = vals.length ? vals.some((v) => v !== "none" && v !== "nil") : null;
         }
-        cells.push({ paragraphs, span, cellBorders });
+        cells.push(nested.length ? { paragraphs, span, cellBorders, nested } : { paragraphs, span, cellBorders });
       }
       rows.push(cells);
     }
