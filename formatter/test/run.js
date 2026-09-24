@@ -80,10 +80,10 @@ async function makeFixture() {
   assert.deepStrictEqual(qs.map((q) => q.number), [1, 2, 3, 4]);
   // options split from one line, degree sign fixed, marks read from the line
   const q1opts = qs[0].items.find((i) => i.kind === "opts");
-  assert.deepStrictEqual(q1opts.items.map(plain), ["a) Oxygen", "b) Carbon dioxide", "c) Nitrogen", "d) Helium"]);
+  assert.deepStrictEqual(q1opts.items.map(plain), ["(a) Oxygen", "(b) Carbon dioxide", "(c) Nitrogen", "(d) Helium"]);
   assert.strictEqual(qs[1].marks, 1);
   assert.ok(/180°\. The value of 90° \+ 90°/.test(plain(qs[1].items[0].runs)), "degree signs fixed in the stem");
-  assert.deepStrictEqual(qs[1].items.find((i) => i.kind === "opts").items.map(plain), ["a) 180°", "b) 270°", "c) 360°", "d) 450°"]);
+  assert.deepStrictEqual(qs[1].items.find((i) => i.kind === "opts").items.map(plain), ["(a) 180°", "(b) 270°", "(c) 360°", "(d) 450°"]);
   // image carried, [1] mark form, one-per-line options merged
   assert.ok(qs[2].items.some((i) => i.kind === "image"), "Q3 keeps its image");
   assert.strictEqual(qs[3].marks, 1);
@@ -203,7 +203,7 @@ async function makeFixture() {
   assert.deepStrictEqual(sq[0].items.find((i) => i.kind === "opts").items.map(plain), ["1)a,b,c,d,e", "2)b,c,a,d,e", "3)c,d,b,e,a"], "numeric answer-key row");
   assert.deepStrictEqual(sq[1].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(1)", "(2)"]);
   assert.deepStrictEqual(sq[2].items.filter((i) => i.kind === "sub").map((i) => i.marks), [2, 3]);
-  assert.deepStrictEqual(sq[3].items.find((i) => i.kind === "opts").items.map(plain).slice(-1), ["e) Brahmaputra"], "five-label rows a)–e)");
+  assert.deepStrictEqual(sq[3].items.find((i) => i.kind === "opts").items.map(plain).slice(-1), ["(e) Brahmaputra"], "five-label rows a)–e)");
   const srev = review(sm, { date: new Date("2026-09-19T06:00:00Z") });
   assert.strictEqual(srev.blocking, false, "a map question without a map is a note, not a blocker (maps are printed separately)");
   assert.ok(srev.markdown.includes("Q4: map question — no map in the file; the outline map is printed separately."), srev.markdown);
@@ -241,7 +241,7 @@ async function makeFixture() {
   const eq = em.sections.flatMap((x) => x.entries.filter((e) => e.kind === "question"));
   assert.deepStrictEqual(eq.map((q) => [q.number, q.marks]), [[1, 5], [2, 5], [3, 5], [4, 5]], "1. items under Q1. are sub-parts");
   assert.deepStrictEqual(eq[0].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(A)", "(B)", "(1)", "(2)"], "A./B. parts and 1./2. items keep their labels");
-  assert.deepStrictEqual(eq[0].items.find((i) => i.kind === "opts").items.map(plain), ["a) Delhi", "b) Kolkata, near Howrah", "c) Mumbai", "d) Chennai"], "options one per line under a lettered part");
+  assert.deepStrictEqual(eq[0].items.find((i) => i.kind === "opts").items.map(plain), ["(a) Delhi", "(b) Kolkata, near Howrah", "(c) Mumbai", "(d) Chennai"], "options one per line under a lettered part");
   const erev = review(em, { date: new Date("2026-09-20T06:00:00Z") });
   assert.ok(erev.markdown.includes("Adds up: A 10 + B 10 = 20"), erev.markdown);
   assert.ok(!erev.markdown.includes("Duplicate question number"), erev.markdown);
@@ -353,10 +353,14 @@ async function makeFixture() {
     p("Answer any 3 out of the given 5 questions on Employability Skills. (3x2=6 m)"),
     p("Q6. What is the purpose of asking questions?"), p("Q7. List three practices for hygiene."), p("Q8. What is a hyperlink?"),
     p("Q9. What is a database?"), p("Q10. What benefits do businesses gain from IT?"),
-    p("Answer any 2 out of the given 3 questions in 50 – 80 words each. (2x4=8m)"),
+    p("Answer any 2 out of the given 4 questions in 50 – 80 words each. (2x4=8m)"),
     p("Q11. Discuss personal hygiene and social interactions."), p("Q12. Explain formal and informal greetings."), p("Q13. Describe typing ergonomics."),
     new Table({ rows: [
       new TableRow({ children: [new TableCell({ children: [p("Q14. Write a program that prints the hypotenuse.")] })] }),
+      new TableRow({ children: [new TableCell({ children: [p("")] })] }),
+    ] }),
+    new Table({ rows: [
+      new TableRow({ children: [new TableCell({ children: [p("Space for rough work")] })] }),
       new TableRow({ children: [new TableCell({ children: [p("")] })] }),
     ] }),
   ] }] });
@@ -364,14 +368,52 @@ async function makeFixture() {
   fs.writeFileSync(itPath, await Packer.toBuffer(itDoc));
   const itm = buildModel(await parseDocx(fs.readFileSync(itPath)), path.basename(itPath));
   const itq = itm.sections[0].entries.filter((e) => e.kind === "question");
-  assert.deepStrictEqual(itq.map((q) => [q.number, q.marks]), [[6, 2], [7, 2], [8, 2], [9, 2], [10, 2], [11, 4], [12, 4], [13, 4]], "each group's per-question mark reaches the questions under it");
+  assert.deepStrictEqual(itq.map((q) => [q.number, q.marks]), [[6, 2], [7, 2], [8, 2], [9, 2], [10, 2], [11, 4], [12, 4], [13, 4], [14, 4]], "each group's per-question mark reaches the questions under it; Q14 typed inside a box table is unwrapped");
   assert.strictEqual(itm.sections[0].entries.filter((e) => e.kind === "note" && e.group).length, 2, "both instruction lines stay as grouped notes");
   const itrev = review(itm, { date: new Date("2026-09-22T06:00:00Z") });
   assert.ok(itrev.markdown.includes("Adds up: B 14 = 14") || itrev.markdown.includes("Questions total 14"), itrev.markdown);
   assert.strictEqual(itrev.blocking, false, itrev.markdown);
   assert.strictEqual(itm.stats.emptyTablesDropped, 1, "trailing empty row of the single-column table dropped");
   const lastTable = itm.sections[0].entries.flatMap((e) => e.items).find((i) => i.kind === "table");
-  assert.ok(lastTable && lastTable.table.rows.length === 1, "the Q14 row is kept");
+  assert.ok(lastTable && lastTable.table.rows.length === 1 && plain(lastTable.table.rows[0][0].paragraphs[0].runs) === "Space for rough work", "the box that is not a question stays a table, without its empty row");
+
+  // --- MCQs laid out as a table: "a)" | question, "(i)" and the option text in separate paragraphs; a question typed
+  //     inside a box table with its own data table inside
+  const cellP = (t) => new TableCell({ children: [p(t)] });
+  const qCell = (lines) => new TableCell({ children: lines.map((t) => p(t)) });
+  const layDoc = new Document({ sections: [{ children: [
+    p("VIDYA VIHAR CONVENT HIGH SCHOOL, CHANDRAPUR", { center: true, bold: true }),
+    p("HALF-YEARLY EXAMINATION – 2026-2027", { center: true }),
+    p("Class: VIII\t\tSubject: Information Technology\t\tMarks: 6"),
+    p("Date: 13/10/2026\t\tRoll No.: ______\t\tTime: 2 hours"),
+    p("Section A (6 marks)"),
+    p("1. Answer any 2 of the below 3 MCQs.\t(2 x 1 = 2 M)"),
+    new Table({ rows: [
+      new TableRow({ children: [cellP("a)"), qCell(["Which command deletes a database?", "(i)", "DROP DATABASE", "(ii)", "DELETE DATABASE", "(iii)", "REMOVE DATABASE", "(iv)", "TRUNCATE DATABASE"])] }),
+      new TableRow({ children: [cellP("b)"), qCell(["Which is a sprite?", "(i)", "Sprite", "(ii)", "Pixel", "(iii)", "Component", "(iv)", "Canvas"])] }),
+      new TableRow({ children: [cellP("c)"), qCell(["Which stores data?", "(i)", "Variable", "(ii)", "Database", "(iii)", "Label", "(iv)", "TextBox"])] }),
+    ] }),
+    new Table({ rows: [new TableRow({ children: [new TableCell({ children: [
+      p("2. Write a query to add a column to this table.\t4M"),
+      new Table({ rows: [
+        new TableRow({ children: [cellP("Age"), cellP("Name")] }),
+        new TableRow({ children: [cellP("16"), cellP("Sonu")] }),
+      ] }),
+      p(""),
+    ] })] })] }),
+  ] }] });
+  const layPath = path.join(dir, "IT_VIII_HYE_2026-27.docx");
+  fs.writeFileSync(layPath, await Packer.toBuffer(layDoc));
+  const laym = buildModel(await parseDocx(fs.readFileSync(layPath)), path.basename(layPath));
+  const layq = laym.sections[0].entries.filter((e) => e.kind === "question");
+  assert.deepStrictEqual(layq.map((q) => q.number), [1, 2], "the question inside the box table is found");
+  assert.deepStrictEqual(layq[0].items.filter((i) => i.kind === "sub").map((i) => i.label), ["(a)", "(b)", "(c)"], "table rows become sub-questions");
+  assert.deepStrictEqual(layq[0].items.filter((i) => i.kind === "opts").map((i) => i.items.map(plain)),
+    [["(i) DROP DATABASE", "(ii) DELETE DATABASE", "(iii) REMOVE DATABASE", "(iv) TRUNCATE DATABASE"], ["(i) Sprite", "(ii) Pixel", "(iii) Component", "(iv) Canvas"], ["(i) Variable", "(ii) Database", "(iii) Label", "(iv) TextBox"]],
+    "each '(i)' cell joins the option text after it");
+  assert.ok(!layq[0].items.some((i) => i.kind === "table"), "no layout table is left in the MCQ question");
+  const inner = layq[1].items.find((i) => i.kind === "table");
+  assert.ok(inner && inner.table.rows.length === 2 && inner.table.rows[0].length === 2, "the inner data table keeps its rows and columns");
 
   // --- subject spellings teachers use
   assert.deepStrictEqual(["SST (SOCIAL STUDIES)", "S.O. Science", "SO.SCIENCE", "Social Science", "Maths", "ENGLISH"].map(subjectSlug),

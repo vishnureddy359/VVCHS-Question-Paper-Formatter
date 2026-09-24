@@ -31,6 +31,7 @@ export QP_BRIDGE_TOKEN=<the TOKEN script property>
 ## Running the pipeline
 
 ```
+python3 pipeline.py pending          # how many papers wait in 1_Inbox (counts only, no file names)
 python3 pipeline.py run --dry-run    # download + format only; nothing changes in Drive
 python3 pipeline.py run              # the real thing
 python3 pipeline.py run --only Maths_8th_PT1_2026-2027.docx

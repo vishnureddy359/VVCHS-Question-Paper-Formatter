@@ -518,9 +518,7 @@ def after_process(entry: dict, result: dict) -> None:
 def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    inbox = qp.list_files("inbox")
-    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f) or is_doc(f)]
-    others = [f["name"] for f in inbox if f not in papers]
+    papers, others = inbox_papers()
     if args.only:
         papers = [f for f in papers if f["name"] == args.only]
         if not papers:
@@ -563,6 +561,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1 if summary["errors"] else 0
 
 
+def inbox_papers() -> tuple[list[dict], list[str]]:
+    inbox = qp.list_files("inbox")
+    papers = [f for f in inbox if f["name"].lower().endswith(".docx") or f["mimeType"] == DOCX_MIME or is_pdf(f) or is_doc(f)]
+    return papers, [f["name"] for f in inbox if f not in papers]
+
+
+def cmd_pending(args: argparse.Namespace) -> int:
+    """Counts only (no file names): safe to print in a public CI log, and cheap enough to run before installing anything."""
+    papers, _ = inbox_papers()
+    print(json.dumps({"papers": len(papers), "doc": sum(1 for f in papers if is_doc(f)), "pdf": sum(1 for f in papers if is_pdf(f))}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="pipeline.py", description="VVCHS question-paper pipeline")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -574,8 +585,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--class-folders", action="store_true", help="file outputs into Class-<n> sub-folders (needs the class-aware bridge, see bridge/README.md)")
     r.add_argument("--track", action="store_true", help="append a row per paper to the tracker sheet (needs the bridge's track action)")
     r.add_argument("--notify", action="store_true", help="email the uploading teacher the outcome (needs the bridge's notify action)")
+    sub.add_parser("pending", help="print how many papers wait in 1_Inbox, as JSON counts without file names")
     a = p.parse_args(argv)
     try:
+        if a.cmd == "pending":
+            return cmd_pending(a)
         if a.cmd == "run":
             global CLASS_FOLDERS, TRACK, NOTIFY
             CLASS_FOLDERS = bool(a.class_folders)
