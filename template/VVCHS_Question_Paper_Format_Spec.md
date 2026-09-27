@@ -25,7 +25,7 @@ Reference: English_IX_HYE_2026-27.pdf (Word-generated). First applied to Maths_I
 - Question: number bold ("1."), text regular; indent left 360 / hanging 360; keepNext + keepLines; spacing after 40.
 - Umbrella question (a stem that only introduces its sub-parts, e.g. "1. Answer any 4 out of the given 6 questions:", "Fill in the blanks:", "Match the following:"): the stem is bold as well, like a sub-heading. A question that is itself answerable ("6. What is a hyperlink?") stays regular. (Added 22 Sep 2026.)
 - Sub-parts (a)/(i): label at 360, text at 720 (indent left 720 / hanging 360).
-- MCQ options, 4 on one line: indent 360, tab stops 2880 / 5400 / 7920; spacing after 120 closes the question.
+- MCQ options: every option label is written "(a)", whatever the teacher typed ("a)", "a.", "(d)Text"). 4 on one line when each option is at most 23 characters: indent 360, tab stops 2880 / 5400 / 7920; 2 per line (tab stop 5400) up to 46 characters; longer options one per line. Options the teacher typed in two columns "(a) … (c) …" over "(b) … (d) …" are read across as (a)(b)(c)(d). Spacing after 120 closes the question; inside a group of MCQs the last option row carries spacing after 160 so the next sub-question stands clear of the options, and the umbrella stem carries spacing after 80 before its first sub-question. (Amended 23 Sep 2026.)
 - Options beside a figure: 2 per line.
 - Marks per question/sub-part: right-aligned at the margin (right tab 10488), written as "1M", "2M", "5M".
 - OR: bold, centred, spacing 40/40.

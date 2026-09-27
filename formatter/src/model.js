@@ -99,6 +99,8 @@ function splitLines(p) {
 
 // ---------------------------------------------------------------- regexes
 
+const TEXT_W_TWIPS = 10488; // A4 text width used by build.js
+
 const RE = {
   school: /vidya\s*vihar/i,
   exam: /\b(examination|exam|test|assessment)\b/i,
@@ -127,13 +129,14 @@ const RE = {
   leadRule: /^[-=~]{5,}\s*(?=\S)/,
   leadMark: /^(\d+(?:\.\d+)?)\s*M(?:arks?)?\b[\s:.\-]*(?=(?:Q\.?\s*)?\d{1,2}\s*[.)]?\s*[A-Za-z(])/i,
   optLabel: /(?<=^|\s)\(?([a-eA-E])[).](?=\s|$|[A-Z₹√(−\-\d])/g,
+  optLabelGlued: /(?<=^|\s|[A-Za-z0-9.)])\(([a-eA-E])\)(?=\s|$|[A-Z₹√(−\-\d])/g,
   optNum: /(?<=^|\s)\(?([1-9])\)\s*/g,
   optRoman: /(?<=^|\s)\((i{1,3}|iv)\)\s*/g,
   subLabel: /^\(?((?:[a-l])|(?:i{1,3}|iv|v|vi{0,3}|ix|x)|[कखगघङडचछजझ])\)\s*/i,
-  subDot: /^([a-l])\.(?:\s+(?=[A-Za-z(])|(?=[A-Z][a-z]))/i,
+  subDot: /^([a-l])\.(?:\s+(?=[A-Za-z(])|(?=[A-Z][a-z])|(?=_{3,}))/i,
   subNum: /^\(?(\d{1,2})\)\s*/,
   subNumDot: /^(\d{1,2})\s*[.)]\s*(?!\d)/,
-  subRomanDot: /^((?:i{1,3}|iv|v|vi{0,3}|ix|x))\s*\.\s+(?=[A-Za-z("'“])/i,
+  subRomanDot: /^((?:i{1,3}|iv|v|vi{0,3}|ix|x))\s*\.(?:\s+(?=[A-Za-z("'“])|(?=_{3,}))/i,
   nestedLabel: /^\(?((?:i{1,3}|iv|v|vi{0,3}|ix|x))\)\s*/i,
   direction: /^(direction|directions|note|instruction|instructions|read the (passage|following)|question nos?\.|questions?\s+\d+|given below|in (the )?questions?\s|for q|answer any\b)/i,
   titleLine: /^(assertion|reason|case[\s-]*study|section|passage|multiple[\s-]*choice|mcq)/i,
@@ -313,22 +316,34 @@ function parseMarksExpr(text) {
 
 // Find option labels in text; returns [{label, start, end(text start)}] if the line starts with one.
 function optionItems(text) {
+  const strict = orderedLabels(text, RE.optLabel);
+  if (strict && strict.length >= 2) return strict;
+  // "(a) Animation(b) Hyperlink(c) Slide Transition(d) Slide Master": labels typed without a space before them
+  const glued = /^\(a\)/i.test(text) ? orderedLabels(text, RE.optLabelGlued) : null;
+  return glued && glued.length >= 2 ? glued : strict;
+}
+
+// labels a,b,c,d in order from the start of the line; a stray "(a)" inside an option ("Both (a) and (b)") is skipped
+function orderedLabels(text, re) {
   const items = [];
-  RE.optLabel.lastIndex = 0;
+  re.lastIndex = 0;
   let m;
-  while ((m = RE.optLabel.exec(text))) {
-    const labelStart = m.index;
-    items.push({ label: m[1], labelStart, textStart: m.index + m[0].length });
-    if (m[0].length === 0) RE.optLabel.lastIndex++;
+  while ((m = re.exec(text))) {
+    items.push({ label: m[1], labelStart: m.index, textStart: m.index + m[0].length });
+    if (m[0].length === 0) re.lastIndex++;
   }
   if (!items.length || items[0].labelStart !== 0) return null;
-  // labels should be in order a,b,c,d (case-insensitive) to count as an option row
-  const seq = items.map((it) => it.label.toLowerCase());
-  const expected = "abcde".slice(0, seq.length).split("");
-  const startsAtA = seq[0] === "a";
-  const ordered = seq.every((l, i) => l === expected[i]) || (!startsAtA && seq.every((l, i) => l.charCodeAt(0) === seq[0].charCodeAt(0) + i));
-  if (!ordered) return null;
-  return items;
+  const first = items[0].label.toLowerCase();
+  if (items.length === 1) return items; // a lone "b) …" line: the caller decides what it is
+  if (first !== "a" && items[1].label.toLowerCase().charCodeAt(0) !== first.charCodeAt(0) + 1) return null;
+  const kept = [];
+  let next = first.charCodeAt(0);
+  for (const it of items) {
+    if (it.label.toLowerCase().charCodeAt(0) !== next) continue;
+    kept.push(it);
+    next++;
+  }
+  return kept.length >= 2 ? kept : null;
 }
 
 function romanItems(text) {
@@ -359,8 +374,15 @@ function splitOptions(runs, allowNum) {
   if (!items || items.length < 2) return null;
   return items.map((it, i) => {
     const end = i + 1 < items.length ? items[i + 1].labelStart : text.length;
-    return normalizeRuns(sliceRuns(runs, it.labelStart, end));
+    return optionRuns(normalizeRuns(sliceRuns(runs, it.labelStart, end)));
   });
+}
+
+// every option carries its label as "(a) " whatever the teacher typed ("a)", "a.", "(a)", "(d)Demonstrative")
+function optionRuns(item) {
+  const m = /^\(?([a-eA-E])[).]\s*/.exec(plain(item));
+  if (!m) return item;
+  return normalizeRuns([{ text: "(" + m[1] + ") " }].concat(sliceRuns(item, m[0].length)));
 }
 
 function extractMark(runs) {
@@ -383,7 +405,7 @@ class Builder {
     this.qDotStyle = false; // questions numbered "Q.1." — then a bare "1)" / "1." line inside a question is a sub-part
     this.subSeq = 0; // last numbered sub-part in the current question
     this.preamble = []; // entries before the first section
-    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0, sectionLettered: [], emptyTablesDropped: 0 };
+    this.stats = { shapesDropped: 0, mathObjects: 0, degreeFixed: [], highlighted: [], tablesRelaid: 0, tablesUnwrapped: 0, sectionLettered: [], emptyTablesDropped: 0 };
     this.lastQuestionNumber = 0;
   }
 
@@ -731,6 +753,116 @@ class Builder {
     this.push({ kind: "table", table });
   }
 
+  // Tables a teacher used only for layout are unwrapped into the paper's own lines:
+  // - rows of "a)" | "question … (i) … (ii) …" under a question: sub-parts with their option rows;
+  // - a single-column box whose text starts a new question ("Q21. …"): its paragraphs, inner tables kept.
+  unwrapLayoutTable(table) {
+    const rows = table.rows.filter((r) => r.some((c) => c.paragraphs.some((p) => plain(p.runs || []).trim() || (p.images && p.images.length))));
+    if (!rows.length) return false;
+    const cellText = (c) => c.paragraphs.map((p) => plain(p.runs || [])).join(" ").trim();
+    const LABEL = /^\(?([a-l]|i{1,3}|iv|vi{0,3}|ix|x|\d{1,2})\s*[).]?$/i;
+    const inQuestion = this.entry && this.entry.kind === "question";
+    // a row is "label | content", or one merged cell whose text starts with the label ("e)     What component …")
+    const INLINE = /^\s*\(?([a-l])\)\s+(?=\S)/;
+    const norm = rows.map((r) => {
+      if (r.length === 2) return LABEL.test(cellText(r[0])) && cellText(r[1]) ? [r[0], r[1]] : null;
+      if (r.length !== 1) return null;
+      const paras = r[0].paragraphs;
+      const at = paras.findIndex((p) => plain(p.runs || []).trim());
+      const m = at >= 0 ? INLINE.exec(plain(paras[at].runs)) : null;
+      if (!m) return null;
+      const rest = paras.slice();
+      rest[at] = Object.assign({}, paras[at], { runs: normalizeRuns(sliceRuns(paras[at].runs, m[0].length)) });
+      return [{ paragraphs: [{ runs: [{ text: m[1] + ")" }], images: [] }] }, Object.assign({}, r[0], { paragraphs: rest })];
+    });
+    // every row labelled and the content holding question-length text: a data table ("A" | "15") stays a table
+    const layout = rows.length >= 2 && norm.every(Boolean) && rows.some((r) => r.length === 2)
+      && norm.reduce((a, r) => a + cellText(r[1]).length, 0) / rows.length >= 20;
+    if (inQuestion && layout) {
+      for (const r of norm) {
+        const lab = cellText(r[0]);
+        const label = "(" + LABEL.exec(lab)[1] + ") ";
+        const paras = r[1].paragraphs.filter((p) => plain(p.runs || []).replace(/\uFFFC/g, "").trim() || (p.images && p.images.length));
+        // the options are typed as "(i)" in one cell and "DROP DATABASE" (or an icon) in the next: pair them up
+        const OPT = /^\(?([a-e]|i{1,3}|iv|v|vi)\)$/i;
+        const textOf = (p) => plain(p.runs || []).replace(/\uFFFC/g, "").trim();
+        const parts = [];
+        for (let k = 0; k < paras.length; k++) {
+          const t = textOf(paras[k]);
+          // "(ii)     an index": label and text in one paragraph, among options typed the other way
+          const both = /^\s*\(?([a-e]|i{1,3}|iv|v|vi)\)\s+(?=\S)/i.exec(plain(paras[k].runs || []));
+          const inOptions = (parts.length && parts[parts.length - 1].opt) || (paras[k + 1] && OPT.test(textOf(paras[k + 1])));
+          if (both && inOptions && !OPT.test(t)) {
+            parts.push({ opt: true, label: "(" + both[1] + ")", runs: normalizeRuns(sliceRuns(paras[k].runs, both[0].length)), images: paras[k].images || [] });
+            continue;
+          }
+          if (OPT.test(t) && !(paras[k].images || []).length) {
+            const nx = paras[k + 1];
+            if (nx && !OPT.test(textOf(nx))) {
+              const runs = normalizeRuns((nx.runs || []).map((x) => Object.assign({}, x, { text: x.text.replace(/\uFFFC/g, "").replace(/\n/g, " ") })));
+              parts.push({ opt: true, label: t, runs, images: nx.images || [] });
+              k++;
+            } else parts.push({ opt: true, label: t, runs: [], images: [] });
+          } else parts.push({ opt: false, para: paras[k] });
+        }
+        const stem = [];
+        let first = true;
+        for (let k = 0; k < parts.length; k++) {
+          if (!parts[k].opt) {
+            for (const l of splitLines(parts[k].para)) {
+              const line = Object.assign({ type: "line" }, l, { num: null });
+              const obj = first ? Object.assign({}, line, { runs: normalizeRuns([{ text: label }].concat(line.runs)) }) : line;
+              stem.push(obj);
+              first = false;
+            }
+            continue;
+          }
+          const group = [];
+          while (k < parts.length && parts[k].opt) group.push(parts[k++]);
+          k--;
+          const pictures = group.some((o) => o.images.length);
+          if (pictures) {
+            // an icon anchored to the question line instead of its own option cell belongs to the one empty option
+            const empty = group.filter((o) => !o.images.length && !plain(o.runs).trim());
+            const holder = stem.filter((l) => l.images && l.images.length);
+            if (empty.length === 1 && holder.length === 1 && holder[0].images.length === 1) {
+              empty[0].images = holder[0].images;
+              holder[0].images = [];
+            }
+          }
+          stem.forEach((l) => this.addLine(l));
+          stem.length = 0;
+          if (pictures) {
+            const n = group.length;
+            const w = Math.floor((TEXT_W_TWIPS - 360) / n);
+            const cells = group.map((o) => ({ span: 1, cellBorders: null, paragraphs: [{ type: "p", runs: normalizeRuns([{ text: o.label + " " }].concat(o.runs)), images: o.images, shapes: 0, math: 0, num: null, text: "" }] }));
+            this.push({ kind: "table", table: { type: "table", rows: [cells], bordered: false, floating: false, cols: Array(n).fill(w) } });
+          } else {
+            this.push({ kind: "opts", items: group.map((o) => normalizeRuns([{ text: o.label + " " }].concat(o.runs))), marks: null });
+          }
+        }
+        stem.forEach((l) => this.addLine(l));
+      }
+      return true;
+    }
+    if (rows.every((r) => r.length === 1) && rows.length <= 3) {
+      const cell = rows[0][0];
+      const firstText = cell.paragraphs.map((p) => plain(p.runs || []).trim()).find((t) => t);
+      if (!firstText || !this.isQuestionStart({ runs: [{ text: firstText }], num: null })) return false;
+      for (const r of rows) {
+        const c = r[0];
+        const nested = c.nested || [];
+        for (let k = 0; k < c.paragraphs.length; k++) {
+          const n = nested.find((x) => x.at === k);
+          if (n) { this.addTable(n.table); k += n.count - 1; continue; }
+          for (const l of splitLines(c.paragraphs[k])) this.addLine(Object.assign({ type: "line" }, l));
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
   noteShapes(n) {
     this.stats.shapesDropped += n;
     if (this.entry) this.entry.shapes = (this.entry.shapes || 0) + n;
@@ -771,6 +903,7 @@ class Builder {
           }
           if (group.length > 1) { this.push({ kind: "tables", tables: group }); this.stats.tablesRelaid += group.length; i = j - 1; continue; }
         }
+        if (this.unwrapLayoutTable(it)) { this.stats.tablesUnwrapped += 1; continue; }
         this.addTable(it);
         continue;
       }
@@ -803,10 +936,16 @@ function dropWholeLineBold(runs) {
   let bold = 0, total = 0;
   for (const r of runs) { const n = r.text.replace(/\s/g, "").length; total += n; if (r.bold) bold += n; }
   if (total && bold / total >= 0.9) for (const r of runs) r.bold = false;
+  // bold on a lone "?", "." or digit is a slip of the teacher's cursor, not emphasis
+  for (const r of runs) if (r.bold && /^[\s\d\p{P}_]+$/u.test(r.text)) r.bold = false;
 }
 
 const endsOpen = (t) => /[a-z0-9,;]$/i.test(t) && !/[.?!:]$/.test(t);
 const startsLower = (t) => /^[a-z(]/.test(t) && !/^\(?[a-h]\)/i.test(t) && !/^\(?(i{1,3}|iv|v|vi{0,3})\)/i.test(t);
+// "… should she use in" + "Writer?": a line ending on a function word, or a fragment of a few words closing the
+// sentence, is the rest of the same sentence whatever its first letter
+const endsDangling = (t) => /\b(a|an|the|in|on|at|of|to|for|with|by|from|and|or|as|is|are|was|were|which|that|into|between|its|their|your|his|her)$/i.test(t);
+const fragment = (t) => t.split(/\s+/).length <= 3 && /[?.]$/.test(t) && !/^\(?[a-z0-9]{1,4}[).]/i.test(t);
 
 function postProcessEntry(e, section) {
   const items = e.items;
@@ -819,7 +958,7 @@ function postProcessEntry(e, section) {
     while (k >= 0 && (out[k].kind === "image" || out[k].kind === "images")) k--;
     const prev = k >= 0 ? out[k] : null;
     if (it.kind === "cont" && prev && (prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs && it.marks == null
-        && endsOpen(plain(prev.runs)) && startsLower(plain(it.runs))) {
+        && endsOpen(plain(prev.runs)) && (startsLower(plain(it.runs)) || endsDangling(plain(prev.runs)) || fragment(plain(it.runs)))) {
       prev.runs = normalizeRuns(prev.runs.concat([{ text: " " }], it.runs));
       continue;
     }
@@ -853,6 +992,9 @@ function postProcessEntry(e, section) {
   }
   items.length = 0; items.push(...out); out.length = 0;
   const mcq = !!(section.marksExpr && section.marksExpr.per === 1) || /multiple\s*choice|mcq/i.test(section.rest + " " + section.instr.map(plain).join(" "));
+  // a question that is a set of MCQs: its stem says so, or it already carries option rows
+  const mcqEntry = (items[0] && items[0].kind === "stem" && /\b(choose|select|tick|pick)\b.*\b(option|answer|one)\b|\bcorrect option\b|\bmcqs?\b/i.test(plain(items[0].runs)))
+    || items.some((x) => x.kind === "opts");
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     // merge consecutive 'tables' groups (a floating table before the question line + the rest after it)
@@ -873,19 +1015,63 @@ function postProcessEntry(e, section) {
       const prev = out[k];
       const afterPart = prev && ((prev.kind === "sub" && /^\([A-L]\)$/.test(prev.label))
         || ((prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs && /\b(choose|select|tick|pick)\b.*\b(option|answer|one)\b|\bcorrect option\b/i.test(plain(prev.runs))));
-      if (ordered && ((run.length === 4 && run.every((x) => isShortOption(x.runs, mcq ? 45 : 60))) || (lower && run.length >= 3 && run.length <= 5 && afterPart))) {
-        out.push({ kind: "opts", items: run.map((x) => normalizeRuns([{ text: x.label.replace(/[()]/g, "") + ") " }].concat(x.runs))), marks: null });
+      // "1. Select the correct option …" then "(1) What does =MAX do?" then four (a)-(d) lines: options, however long
+      const underSubQuestion = prev && prev.kind === "sub" && /^\((\d{1,2}|[ivx]{1,5})\)$/i.test(prev.label) && run.length >= 3 && run.length <= 5
+        && run.every((x) => isShortOption(x.runs, 150));
+      if (ordered && ((run.length === 4 && run.every((x) => isShortOption(x.runs, mcq ? 45 : 60))) || (lower && run.length >= 3 && run.length <= 5 && afterPart)
+          || (underSubQuestion && (mcq || mcqEntry)))) {
+        out.push({ kind: "opts", items: run.map((x) => normalizeRuns([{ text: x.label + " " }].concat(x.runs))), marks: null });
         i = j - 1; continue;
       }
     }
-    // two 2-item option rows -> one 4-item row when everything is short
-    if (it.kind === "opts" && it.items.length === 2 && i + 1 < items.length && items[i + 1].kind === "opts" && items[i + 1].items.length === 2) {
-      const all = it.items.concat(items[i + 1].items);
-      if (all.every((o) => plain(o).length <= 22)) { out.push({ kind: "opts", items: all, marks: it.marks }); i++; continue; }
+    // options typed in two columns, "(a) … <TAB> (c) …" over "(b) … <TAB> (d) …", read across as (a)(b)(c)(d)
+    if (it.kind === "sub" && /^\(a\)$/i.test(it.label) && it.marks == null && !it.nested && i + 1 < items.length) {
+      const nx = items[i + 1];
+      const colOpts = columnOptions(it, nx);
+      if (colOpts) { out.push({ kind: "opts", items: colOpts, marks: null }); i++; continue; }
+    }
+    // "(a) … (b) …" over "(c) … (d) …": option rows whose labels run on are one set; the layout picks the columns
+    if (it.kind === "opts") {
+      const merged = { kind: "opts", items: it.items.slice(), marks: it.marks };
+      let j = i + 1;
+      while (j < items.length && items[j].kind === "opts" && merged.items.length + items[j].items.length <= 6 && labelsRunOn(merged.items, items[j].items)) {
+        merged.items.push(...items[j].items);
+        j++;
+      }
+      if (j > i + 1) { out.push(merged); i = j - 1; continue; }
     }
     out.push(it);
   }
   e.items = out;
+}
+
+// the first label of the next row is the successor of the last label of this one ("(b)" after "(a)", "(iii)" after "(ii)")
+function labelsRunOn(a, b) {
+  const lab = (o) => (/^\(?([a-eA-E]|i{1,3}|iv|v|vi{0,3})[).]/.exec(plain(o)) || [])[1];
+  const last = lab(a[a.length - 1]), first = lab(b[0]);
+  if (!last || !first) return false;
+  const roman = ["i", "ii", "iii", "iv", "v", "vi"];
+  if (roman.includes(last.toLowerCase())) return roman.indexOf(first.toLowerCase()) === roman.indexOf(last.toLowerCase()) + 1;
+  return first.charCodeAt(0) === last.charCodeAt(0) + 1;
+}
+
+// "(a) To write letters<TAB>(c) To perform calculations" + "(b) To create presentations<TAB>(d) To draw images"
+function columnOptions(a, b) {
+  if (!b || b.kind !== "sub" || !/^\(b\)$/i.test(b.label) || b.marks != null || b.nested) return null;
+  const upper = a.label === "(A)";
+  if (upper !== (b.label === "(B)")) return null;
+  const split = (it, want) => {
+    const t = plain(it.runs);
+    const m = new RegExp("\\t\\(?(" + want + ")[).]\\s*", upper ? "" : "i").exec(t);
+    if (!m || m.index === 0 || m.index + m[0].length >= t.length) return null;
+    if (t.indexOf("\t", m.index + 1) >= 0) return null;
+    const lab = (s) => "(" + s + ") ";
+    return [normalizeRuns([{ text: lab(it.label.slice(1, -1)) }].concat(sliceRuns(it.runs, 0, m.index))),
+      normalizeRuns([{ text: lab(m[1]) }].concat(sliceRuns(it.runs, m.index + m[0].length)))];
+  };
+  const ac = split(a, upper ? "C" : "c"), bd = split(b, upper ? "D" : "d");
+  if (!ac || !bd) return null;
+  return [ac[0], bd[0], ac[1], bd[1]];
 }
 
 // ---------------------------------------------------------------- marks inference & fixes

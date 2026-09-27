@@ -83,6 +83,11 @@ const C = (runs, o = {}) => {
 
 // approximate width (twips) of a label in Times New Roman 11, to keep the text column clear of wide labels
 const labelWidth = (label) => [...label].reduce((w, c) => w + (/\d/.test(c) ? 110 : /[().]/.test(c) ? 73 : /[il]/.test(c) ? 61 : /[a-z]/.test(c) ? 98 : 150), 0);
+// printed width (twips) of a line of Times New Roman 11, from the font's advance widths (units per 1000 em)
+const TNR_W = Object.assign(Object.fromEntries([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((c, k) => [c, [722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611][k]])),
+  Object.fromEntries([..."abcdefghijklmnopqrstuvwxyz"].map((c, k) => [c, [444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500, 500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444][k]])),
+  { " ": 250, "(": 333, ")": 333, ".": 250, ",": 250, ":": 278, ";": 278, "-": 333, "_": 500, "'": 180, '"': 408, "/": 278, "?": 444, "!": 333 });
+const textWidth = (t) => Math.round([...t].reduce((w, c) => w + (TNR_W[c] || 500), 0) * 0.22);
 // text column for a question's sub-parts: 720 unless a label such as "(10)" or "(viii)" would run into it
 const subLeftFor = (labels) => Math.max(720, ...labels.map((l) => Math.ceil((360 + labelWidth(l) + 100) / 60) * 60));
 
@@ -112,7 +117,7 @@ const OPTS = (items, positions, o = {}) => {
   });
 };
 const OPT_POS = { 4: [2880, 5400, 7920], 3: [3720, 7080], 2: [5400] };
-const OPTS_GAP = 80; // twips after an option row when the next sub-question of the same question follows
+const OPTS_GAP = 160; // twips after the last option row, so the next sub-question stands clear of the options
 
 const OR = (o = {}) => P([{ text: "OR", bold: true }], { align: AlignmentType.CENTER, before: o.before == null ? 40 : o.before, after: o.after == null ? 40 : o.after, keepNext: true });
 
@@ -342,7 +347,9 @@ function renderEntry(e, section, showInferred) {
   // keep a question on one page only while it is short: a long passage with many parts must be allowed to
   // break, or Word pushes the whole chain (and everything chained before it) to the next page
   const textLen = items.reduce((a, x) => a + (x.runs ? plain(x.runs).length : 0) + (x.items ? x.items.reduce((b, o) => b + plain(o).length, 0) : 0), 0);
-  const longEntry = textLen > 900 || items.length > 14;
+  // a group of several MCQs may break between sub-questions too (each stays with its options), or a group that
+  // does not fit the rest of the page leaves half of it blank
+  const longEntry = textLen > 900 || items.length > 8;
   // in a long entry a paragraph still stays with the option row or image that belongs to it
   const keepWith = (idx) => { const nx = items[idx + 1]; return !!nx && (nx.kind === "opts" || nx.kind === "image" || nx.kind === "images" || nx.kind === "or"); };
   const subLeft = subLeftFor(items.filter((x) => x.kind === "sub").map((x) => x.label));
@@ -357,13 +364,20 @@ function renderEntry(e, section, showInferred) {
         if (isQ && e.number != null) {
           // a stem that only introduces sub-parts ("Answer any 4 of the given 6 questions:", "Fill in the blanks:")
           // is a sub-heading and is set bold like the number; a question that is itself answerable stays regular
-          const stemRuns = idx === 0 && umbrellaStem(e) ? runs.map((r) => Object.assign({}, r, { bold: true })) : runs;
-          return [Q(questionLabel(e), stemRuns, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : 40, keepNext: chain })];
+          const umbrella = idx === 0 && umbrellaStem(e);
+          const stemRuns = umbrella ? runs.map((r) => Object.assign({}, r, { bold: true })) : runs;
+          return [Q(questionLabel(e), stemRuns, { mark: idx === 0 ? stemMark : null, right, after: last ? 120 : umbrella ? 80 : 40, keepNext: chain })];
         }
         if (e.center) return [INSTR(runs, { align: AlignmentType.CENTER, after })];
         return [INSTR(runs, { after: last ? 80 : 40, keepNext: chain })];
       }
-      case "cont": return [C(it.runs, { mark: markText(it.marks && it.marks !== e.marks ? it.marks : null), right, after: last ? 120 : 40, keepNext: chain })];
+      case "cont": {
+        // a line that carries on a sub-part ("(i) … She wants to" + "increase the contrast …") sits in the sub-part's text column
+        let k = idx - 1;
+        while (k >= 0 && items[k].kind === "cont") k--;
+        const left = k >= 0 && items[k].kind === "sub" ? subLeft : undefined;
+        return [C(it.runs, { mark: markText(it.marks && it.marks !== e.marks ? it.marks : null), right, left, after: last ? 120 : 40, keepNext: chain })];
+      }
       case "sub": {
         // a nested label "(d) (i) …" would overflow the hanging indent, so it rides with the text
         const runs = it.nested ? [{ text: it.nested + " " }].concat(it.runs) : it.runs;
@@ -377,8 +391,15 @@ function renderEntry(e, section, showInferred) {
           for (let i = 0; i < n; i += 2) rows.push(OPTS(it.items.slice(i, i + 2), [Math.round(ctx.width / 2)], { after: i + 2 >= n ? after || OPTS_GAP : 0, keepNext: i + 2 < n }));
           return rows;
         }
+        // printed width of the widest option, label included: capitals run half as wide again as lower case, so
+        // "(iv) TRUNCATE DATABASE" needs a half-width column while "(d) Table of Contents" fits a quarter
+        // the character limits (label included) decide first; the width check only steps down a row whose capitals
+        // would overflow its column
         const longest = Math.max(...it.items.map((o) => plain(o).length));
-        const perLine = n <= 2 ? (longest <= 45 ? 2 : 1) : n === 3 ? (longest <= 28 ? 3 : 1) : longest <= 22 ? 4 : longest <= 45 ? 2 : 1;
+        const widest = Math.max(...it.items.map((o) => textWidth(plain(o))));
+        const quarter = 2520 - 120, third = 3360 - 120, half = 5040 - 120;
+        const fits4 = longest <= 23 && widest <= quarter, fits3 = longest <= 29 && widest <= third, fits2 = longest <= 46 && widest <= half;
+        const perLine = n <= 2 ? (fits2 ? 2 : 1) : n === 3 ? (fits3 ? 3 : 1) : fits4 ? 4 : fits2 ? 2 : 1;
         if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || chain }));
         const rows = [];
         for (let i = 0; i < n; i += perLine) {

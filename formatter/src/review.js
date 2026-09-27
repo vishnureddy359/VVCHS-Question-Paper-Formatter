@@ -280,6 +280,7 @@ function review(model, opts = {}) {
   if (model.stats.sectionLettered && model.stats.sectionLettered.length) {
     c.push(`Section heading without a letter given the next letter: ${model.stats.sectionLettered.join("; ")}. Confirm.`);
   }
+  if (model.stats.tablesUnwrapped) c.push(`${model.stats.tablesUnwrapped} table${model.stats.tablesUnwrapped > 1 ? "s" : ""} used only for layout (question labels in one column, question and options in the other, or a box around a question) unwrapped into normal questions and option rows.`);
   if (model.stats.emptyTablesDropped) c.push(`${model.stats.emptyTablesDropped} empty table${model.stats.emptyTablesDropped > 1 ? "s" : ""} or trailing empty row${model.stats.emptyTablesDropped > 1 ? "s" : ""} (answer boxes) dropped.`);
   if (model.stats.degreeFixed.length) {
     const qs = [...new Set(model.stats.degreeFixed)];
