@@ -139,6 +139,7 @@ function review(model, opts = {}) {
       }
       const orWithMark = p.items.find((x) => x.kind === "or" && x.marks != null);
       if (orWithMark) f.marks.push(`${qLabel(p)}: the mark sits on the OR line instead of the question.`);
+      if (p.marksSource === "section remainder") f.marks.push(`${qLabel(p)}: no mark in the paper; ${p.marks}M filled in from the section total. Confirm it.`);
     }
   }
   const okSections = sectionTotals.filter((t) => (t.expected != null && t.sum === t.expected) || (model.sections.find((x) => x.letter === t.letter) || {}).implicit);

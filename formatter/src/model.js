@@ -122,7 +122,8 @@ const RE = {
   // "Section D (15 marks) Q. 8. Answer …": a question start glued to a section heading
   sectionGlue: /\s(?=Q\s*\.?\s*\d{1,2}\s*[.):])/i,
   qNum: /^(\d{1,2})\s*[.):\]]\s*(?!\d)/,
-  qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
+  // "5. (A) …", "5.A. …" and "37 A. …" start alternative A; glued "9A. …" is a sub-part label, not an alternative
+  qNumAlt: /^(?:(\d{1,2})\s*\.?\s*\(?([AB])\)\s*|(\d{1,2})(?:\s*\.\s*|\s+)([AB])\.\s+)/,
   altOnly: /^\(([AB])\)\s+/,
   mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक)|\(\s*(\d{1,2})\s*\))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
@@ -577,7 +578,7 @@ class Builder {
     const numSub = (this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
       && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1)) || backwards;
     if (qm) { number = qm[1] != null ? Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))) : romanToInt(qm[2]); cut = qm[0].length; this.qDotStyle = true; }
-    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
+    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1] || qm[3]); alt = qm[2] || qm[4]; cut = qm[0].length; }
     else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
     else if (!numSub && wordNum != null) {
       number = wordNum;
@@ -640,7 +641,7 @@ class Builder {
     // sub-part "(a) ..." / "i) ..." / "a. ..." (single label at line start)
     const sm = RE.subLabel.exec(text) || RE.subDot.exec(text) || RE.subRomanDot.exec(text) || (numSub ? RE.subNumDot.exec(text) : null);
     // "(B) …" right after OR in a question labelled (A) is the alternative, not a sub-part
-    if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^\(?B\)/.test(text)
+    if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^(?:\(?B\)|B\.\s)/.test(text)
         && this.entry.items.length && this.entry.items[this.entry.items.length - 1].kind === "or") {
       const q = this.newQuestion(this.entry.number, "B", stripPrefix(runs, sm[0].length), marks);
       if (q.items.length) this.absorbInlineOptions(q.items[0], "runs");
@@ -978,9 +979,12 @@ function postProcessEntry(e, section) {
     let k = out.length - 1;
     while (k >= 0 && (out[k].kind === "image" || out[k].kind === "images")) k--;
     const prev = k >= 0 ? out[k] : null;
-    if (it.kind === "cont" && prev && (prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs && it.marks == null
+    // the mark may sit on the second line of a wrapped question (PDF conversions): it moves with the text
+    if (it.kind === "cont" && prev && (prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs
+        && (it.marks == null || (prev.kind === "stem" ? e.marks == null || e.marks === it.marks : prev.marks == null))
         && endsOpen(plain(prev.runs)) && (startsLower(plain(it.runs)) || endsDangling(plain(prev.runs)) || fragment(plain(it.runs)))) {
       prev.runs = normalizeRuns(prev.runs.concat([{ text: " " }], it.runs));
+      if (it.marks != null) { if (prev.kind === "stem") e.marks = it.marks; else prev.marks = it.marks; }
       continue;
     }
     out.push(it);
@@ -1197,6 +1201,19 @@ function inferMarks(model) {
       }
       if (e.marks != null && prevQ && prevQ.number === e.number && prevQ.marks == null) { prevQ.marks = e.marks; prevQ.marksSource = "OR twin"; }
       prevQ = e;
+    }
+    // a section heading such as "HISTORY (20 marks)" with exactly one unmarked question (often the map question):
+    // the question is worth what the other questions leave over
+    const total = s.marksExpr && s.marksExpr.total;
+    if (total && !per) {
+      const qs = s.entries.filter((e) => e.kind === "question");
+      const seen = new Map();
+      for (const e of qs) if (e.marks != null && !seen.has(e.number)) seen.set(e.number, e.marks);
+      const unmarked = qs.filter((e) => e.marks == null);
+      const rest = total - [...seen.values()].reduce((a, b) => a + b, 0);
+      // a number that comes back later (a passage whose parts restart at 1) makes the sum unreliable: leave it
+      const repeated = qs.some((e, i) => i && e.number !== qs[i - 1].number && qs.slice(0, i - 1).some((o) => o.number === e.number));
+      if (!repeated && unmarked.length === 1 && seen.size >= 2 && rest > 0 && rest <= 10) { unmarked[0].marks = rest; unmarked[0].marksSource = "section remainder"; }
     }
   }
 }

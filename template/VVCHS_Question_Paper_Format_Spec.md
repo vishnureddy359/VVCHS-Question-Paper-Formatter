@@ -28,6 +28,10 @@ Reference: English_IX_HYE_2026-27.pdf (Word-generated). First applied to Maths_I
 - MCQ options: every option label is written "(a)", whatever the teacher typed ("a)", "a.", "(d)Text"). 4 on one line when each option is at most 21 characters: indent 360, tab stops 2880 / 5400 / 7920; 2 per line (tab stop 5400) up to 42 characters; longer options one per line. Options the teacher typed in two columns "(a) … (c) …" over "(b) … (d) …" are read across as (a)(b)(c)(d). Spacing after 120 closes the question; inside a group of MCQs the last option row carries spacing after 160 so the next sub-question stands clear of the options, and the umbrella stem carries spacing after 80 before its first sub-question. (Amended 23 Sep 2026.)
 - Options beside a figure: 2 per line.
 - Marks per question/sub-part: right-aligned at the margin (right tab 10488), written as "1M", "2M", "5M".
+- A question without a mark takes the remainder of its section heading total when it is the only unmarked question
+  in that section (typically the map question); the review says "filled in from the section total. Confirm it."
+- "5. (A) …", "5.A. …" and "37 A. …" followed by OR and "(B) …" / "B. …" are an OR pair, numbered 5(A) / 5(B).
+  A glued "9A. …" / "9B. …" without OR is a pair of sub-parts.
 - OR: bold, centred, spacing 40/40.
 - Figures: borderless 2-column table (text left, image right-aligned), row cantSplit, cell vAlign centre; keep the source display size. Cell margins 0 (left cell right margin 100).
 - Superscripts as true superscript runs; recurring decimals with combining overline (2.2̅5̅7̅).

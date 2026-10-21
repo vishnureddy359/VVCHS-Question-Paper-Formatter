@@ -29,6 +29,16 @@ const LOGO = path.join(__dirname, "..", "..", "template", "vvchs_logo.jpg");
 const DEVANAGARI = /[\u0900-\u097F]/;
 const CS_FONT = "Mangal"; // complex-script font for Devanagari runs (Word picks w:cs for that script)
 
+// drop the first n characters of a run list
+function stripLead(runs, n) {
+  const out = [];
+  for (const r of runs) {
+    if (n >= r.text.length) { n -= r.text.length; continue; }
+    out.push(n ? Object.assign({}, r, { text: r.text.slice(n) }) : r); n = 0;
+  }
+  return out;
+}
+
 function textRuns(runs, base = {}) {
   if (typeof runs === "string") runs = [{ text: runs }];
   return runs.map((r) => new TextRun({
@@ -302,6 +312,9 @@ function headerBlock(model, totals) {
   if (h.instructions.length) {
     out.push(P([{ text: "General Instructions:" }], { bold: true, italics: true, underline: true, size: 24, before: 60, after: 0, keepNext: true }));
     h.instructions.forEach((runs, i) => {
+      // teachers' own "i." / "(ii)" labels are dropped: the list is numbered 1., 2., … by the template
+      const roman = /^\(?[ivx]{1,4}[.)]\s+/i.exec(plain(runs));
+      if (roman) runs = stripLead(runs, roman[0].length);
       const text = plain(runs);
       const numbered = /^\d+\s*[.)]/.test(text);
       const body = numbered ? runs : [{ text: `${i + 1}.\t` }].concat(runs);
