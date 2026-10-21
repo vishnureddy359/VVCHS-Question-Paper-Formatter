@@ -7,7 +7,7 @@ Reference: English_IX_HYE_2026-27.pdf (Word-generated). First applied to Maths_I
 - Page border on every page, offset from page edge (space 24pt), size 12:
   top/left = thinThickSmallGap, bottom/right = thickThinSmallGap (renders thick outer + thin inner line).
 - Footer: "Page N" centred, Calibri 11.
-- Body font: Times New Roman 11, line spacing 1.15 (w:line=276, auto). Passages justified.
+- Body font: Times New Roman 12, line spacing 1.15 (w:line=276, auto). Passages justified. (Was 11 until 5 Oct 2026.)
 
 ## 2. Header block (page 1 only)
 - School logo (vvchs_logo.jpeg, 47×41 pt) floating top-left: horizontal offset −97790 EMU from column, vertical ≈ −40000 EMU from title paragraph. No wrap.
@@ -21,13 +21,17 @@ Reference: English_IX_HYE_2026-27.pdf (Word-generated). First applied to Maths_I
 
 ## 3. Body
 - Section heading: SECTION A – <TITLE> (<marks>) — TNR Bold 14, centred, underlined, spacing before 200 / after 120. Marks expression stays inside the heading in parentheses.
-- Section instruction line ("Questions 1–18: …") — TNR Bold 11, left.
+- Section instruction line ("Questions 1–18: …") — TNR Bold 12, left.
 - Question: number bold ("1."), text regular; indent left 360 / hanging 360; keepNext + keepLines; spacing after 40.
 - Umbrella question (a stem that only introduces its sub-parts, e.g. "1. Answer any 4 out of the given 6 questions:", "Fill in the blanks:", "Match the following:"): the stem is bold as well, like a sub-heading. A question that is itself answerable ("6. What is a hyperlink?") stays regular. (Added 22 Sep 2026.)
 - Sub-parts (a)/(i): label at 360, text at 720 (indent left 720 / hanging 360).
-- MCQ options: every option label is written "(a)", whatever the teacher typed ("a)", "a.", "(d)Text"). 4 on one line when each option is at most 23 characters: indent 360, tab stops 2880 / 5400 / 7920; 2 per line (tab stop 5400) up to 46 characters; longer options one per line. Options the teacher typed in two columns "(a) … (c) …" over "(b) … (d) …" are read across as (a)(b)(c)(d). Spacing after 120 closes the question; inside a group of MCQs the last option row carries spacing after 160 so the next sub-question stands clear of the options, and the umbrella stem carries spacing after 80 before its first sub-question. (Amended 23 Sep 2026.)
+- MCQ options: every option label is written "(a)", whatever the teacher typed ("a)", "a.", "(d)Text"). 4 on one line when each option is at most 21 characters: indent 360, tab stops 2880 / 5400 / 7920; 2 per line (tab stop 5400) up to 42 characters; longer options one per line. Options the teacher typed in two columns "(a) … (c) …" over "(b) … (d) …" are read across as (a)(b)(c)(d). Spacing after 120 closes the question; inside a group of MCQs the last option row carries spacing after 160 so the next sub-question stands clear of the options, and the umbrella stem carries spacing after 80 before its first sub-question. (Amended 23 Sep 2026.)
 - Options beside a figure: 2 per line.
 - Marks per question/sub-part: right-aligned at the margin (right tab 10488), written as "1M", "2M", "5M".
+- A question without a mark takes the remainder of its section heading total when it is the only unmarked question
+  in that section (typically the map question); the review says "filled in from the section total. Confirm it."
+- "5. (A) …", "5.A. …" and "37 A. …" followed by OR and "(B) …" / "B. …" are an OR pair, numbered 5(A) / 5(B).
+  A glued "9A. …" / "9B. …" without OR is a pair of sub-parts.
 - OR: bold, centred, spacing 40/40.
 - Figures: borderless 2-column table (text left, image right-aligned), row cantSplit, cell vAlign centre; keep the source display size. Cell margins 0 (left cell right margin 100).
 - Superscripts as true superscript runs; recurring decimals with combining overline (2.2̅5̅7̅).

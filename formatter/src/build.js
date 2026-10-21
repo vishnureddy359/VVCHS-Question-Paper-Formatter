@@ -20,6 +20,7 @@ const M_L = 709, M_R = 709, M_T = 700, M_B = 567;
 const TEXT_W = PAGE_W - M_L - M_R; // 10488 twips
 const FONT = "Times New Roman";
 const LINE = 276; // 1.15 line spacing
+const BODY = 24; // body text: Times New Roman 12 (half-points)
 const pt2px = (pt) => Math.round(pt * 4 / 3);
 const pt2tw = (pt) => Math.round(pt * 20);
 const LOGO = path.join(__dirname, "..", "..", "template", "vvchs_logo.jpg");
@@ -28,13 +29,23 @@ const LOGO = path.join(__dirname, "..", "..", "template", "vvchs_logo.jpg");
 const DEVANAGARI = /[\u0900-\u097F]/;
 const CS_FONT = "Mangal"; // complex-script font for Devanagari runs (Word picks w:cs for that script)
 
+// drop the first n characters of a run list
+function stripLead(runs, n) {
+  const out = [];
+  for (const r of runs) {
+    if (n >= r.text.length) { n -= r.text.length; continue; }
+    out.push(n ? Object.assign({}, r, { text: r.text.slice(n) }) : r); n = 0;
+  }
+  return out;
+}
+
 function textRuns(runs, base = {}) {
   if (typeof runs === "string") runs = [{ text: runs }];
   return runs.map((r) => new TextRun({
     text: r.text.replace(/\t/g, " "),
     font: DEVANAGARI.test(r.text) ? { ascii: FONT, hAnsi: FONT, cs: CS_FONT, eastAsia: FONT } : FONT,
-    sizeComplexScript: base.size || 22,
-    size: base.size || 22,
+    sizeComplexScript: base.size || BODY,
+    size: base.size || BODY,
     bold: base.bold || !!r.bold,
     italics: base.italics || !!r.italic,
     underline: base.underline || r.underline ? {} : undefined,
@@ -43,8 +54,8 @@ function textRuns(runs, base = {}) {
     highlight: r.highlight ? "yellow" : undefined,
   }));
 }
-const T = (text, o = {}) => new TextRun(Object.assign({ text, font: FONT, size: 22 }, o));
-const TAB = () => new TextRun({ text: "\t", font: FONT, size: 22 });
+const T = (text, o = {}) => new TextRun(Object.assign({ text, font: FONT, size: BODY }, o));
+const TAB = () => new TextRun({ text: "\t", font: FONT, size: BODY });
 
 const P = (runs, o = {}) => new Paragraph({
   alignment: o.align || AlignmentType.LEFT,
@@ -81,13 +92,13 @@ const C = (runs, o = {}) => {
   });
 };
 
-// approximate width (twips) of a label in Times New Roman 11, to keep the text column clear of wide labels
-const labelWidth = (label) => [...label].reduce((w, c) => w + (/\d/.test(c) ? 110 : /[().]/.test(c) ? 73 : /[il]/.test(c) ? 61 : /[a-z]/.test(c) ? 98 : 150), 0);
-// printed width (twips) of a line of Times New Roman 11, from the font's advance widths (units per 1000 em)
+// approximate width (twips) of a label in Times New Roman 12, to keep the text column clear of wide labels
+const labelWidth = (label) => [...label].reduce((w, c) => w + (/\d/.test(c) ? 120 : /[().]/.test(c) ? 80 : /[il]/.test(c) ? 67 : /[a-z]/.test(c) ? 107 : 164), 0);
+// printed width (twips) of a line of Times New Roman 12, from the font's advance widths (units per 1000 em)
 const TNR_W = Object.assign(Object.fromEntries([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((c, k) => [c, [722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611][k]])),
   Object.fromEntries([..."abcdefghijklmnopqrstuvwxyz"].map((c, k) => [c, [444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500, 500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444][k]])),
   { " ": 250, "(": 333, ")": 333, ".": 250, ",": 250, ":": 278, ";": 278, "-": 333, "_": 500, "'": 180, '"': 408, "/": 278, "?": 444, "!": 333 });
-const textWidth = (t) => Math.round([...t].reduce((w, c) => w + (TNR_W[c] || 500), 0) * 0.22);
+const textWidth = (t) => Math.round([...t].reduce((w, c) => w + (TNR_W[c] || 500), 0) * (BODY / 2 * 20 / 1000));
 // text column for a question's sub-parts: 720 unless a label such as "(10)" or "(viii)" would run into it
 const subLeftFor = (labels) => Math.max(720, ...labels.map((l) => Math.ceil((360 + labelWidth(l) + 100) / 60) * 60));
 
@@ -301,6 +312,9 @@ function headerBlock(model, totals) {
   if (h.instructions.length) {
     out.push(P([{ text: "General Instructions:" }], { bold: true, italics: true, underline: true, size: 24, before: 60, after: 0, keepNext: true }));
     h.instructions.forEach((runs, i) => {
+      // teachers' own "i." / "(ii)" labels are dropped: the list is numbered 1., 2., … by the template
+      const roman = /^\(?[ivx]{1,4}[.)]\s+/i.exec(plain(runs));
+      if (roman) runs = stripLead(runs, roman[0].length);
       const text = plain(runs);
       const numbered = /^\d+\s*[.)]/.test(text);
       const body = numbered ? runs : [{ text: `${i + 1}.\t` }].concat(runs);
@@ -393,12 +407,12 @@ function renderEntry(e, section, showInferred) {
         }
         // printed width of the widest option, label included: capitals run half as wide again as lower case, so
         // "(iv) TRUNCATE DATABASE" needs a half-width column while "(d) Table of Contents" fits a quarter
-        // the character limits (label included) decide first; the width check only steps down a row whose capitals
-        // would overflow its column
+        // the character limits (label included, for 12 pt) decide first; the width check only steps down a row whose
+        // capitals would overflow its column
         const longest = Math.max(...it.items.map((o) => plain(o).length));
         const widest = Math.max(...it.items.map((o) => textWidth(plain(o))));
         const quarter = 2520 - 120, third = 3360 - 120, half = 5040 - 120;
-        const fits4 = longest <= 23 && widest <= quarter, fits3 = longest <= 29 && widest <= third, fits2 = longest <= 46 && widest <= half;
+        const fits4 = longest <= 21 && widest <= quarter, fits3 = longest <= 27 && widest <= third, fits2 = longest <= 42 && widest <= half;
         const perLine = n <= 2 ? (fits2 ? 2 : 1) : n === 3 ? (fits3 ? 3 : 1) : fits4 ? 4 : fits2 ? 2 : 1;
         if (perLine === 1) return it.items.map((o, i) => C(o, { after: i === n - 1 ? (last ? 120 : OPTS_GAP) : 0, keepNext: i < n - 1 || chain }));
         const rows = [];
@@ -458,7 +472,7 @@ function buildBody(model) {
     for (const e of s.entries) body.push(...renderEntry(e, s, showInferred));
   }
   body.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { line: LINE, lineRule: "auto", before: 120, after: 0 },
-    children: [new TextRun({ text: "*".repeat(40) + " END " + "*".repeat(40), font: FONT, size: 22, bold: true })] }));
+    children: [new TextRun({ text: "*".repeat(36) + " END " + "*".repeat(36), font: FONT, size: BODY, bold: true })] }));
   return body;
 }
 
@@ -467,7 +481,7 @@ async function buildDocx(model, totals) {
   const doc = new Document({
     creator: "VVCHS QP Formatter",
     title: model.naming.base,
-    styles: { default: { document: { run: { font: FONT, size: 22 }, paragraph: { spacing: { line: LINE, lineRule: "auto" } } } } },
+    styles: { default: { document: { run: { font: FONT, size: BODY }, paragraph: { spacing: { line: LINE, lineRule: "auto" } } } } },
     sections: [{
       properties: { page: {
         size: { width: PAGE_W, height: PAGE_H },

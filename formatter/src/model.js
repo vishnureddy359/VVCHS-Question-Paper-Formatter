@@ -94,7 +94,9 @@ function splitLines(p) {
   }
   flush();
   return lines.map((l) => ({ runs: normalizeRuns(l.runs), images: l.images, num: p.num, style: p.style, align: p.align, shapes: p.shapes, math: p.math }))
-    .filter((l, i, arr) => l.runs.length || l.images.length || (arr.length === 1));
+    .filter((l, i, arr) => l.runs.length || l.images.length || (arr.length === 1))
+    // Word's auto-number belongs to the paragraph, i.e. to its first line only; a line after a hard break is a continuation.
+    .map((l, i) => (i ? Object.assign(l, { num: null }) : l));
 }
 
 // ---------------------------------------------------------------- regexes
@@ -119,10 +121,11 @@ const RE = {
   subSplit: /(\(\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+\s*=\s*\d+\s*(?:marks?|m)?\s*\))\s+(?=\(?\d{1,2}\)\s*\S)/i,
   // "Section D (15 marks) Q. 8. Answer …": a question start glued to a section heading
   sectionGlue: /\s(?=Q\s*\.?\s*\d{1,2}\s*[.):])/i,
-  qNum: /^(\d{1,2})\s*[.):]\s*(?!\d)/,
-  qNumAlt: /^(\d{1,2})\s*\.?\s*\(?([AB])\)\s*/,
+  qNum: /^(\d{1,2})\s*[.):\]]\s*(?!\d)/,
+  // "5. (A) …", "5.A. …" and "37 A. …" start alternative A; glued "9A. …" is a sub-part label, not an alternative
+  qNumAlt: /^(?:(\d{1,2})\s*\.?\s*\(?([AB])\)\s*|(\d{1,2})(?:\s*\.\s*|\s+)([AB])\.\s+)/,
   altOnly: /^\(([AB])\)\s+/,
-  mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक))\s*$/i,
+  mark: /(?:^|\s)(?:\[\s*(\d+)\s*\]|\(\s*(\d+)\s*(?:marks?|m|अंक)\s*\)|(\d+)\s*(?:M(?:arks?)?|अंक)|\(\s*(\d{1,2})\s*\))\s*$/i,
   orLine: /^OR\s*(?:\(?(\d+)\s*M(?:arks?)?\)?)?\s*[:.]?\s*$/i,
   orTrail: /\s+OR\s*[.:]?\s*$/,
   sectionBare: /^section\s*[:\-–—]\s*(?![a-h]\b)([A-Za-z\u0900-\u097F].*)$/i,
@@ -390,7 +393,11 @@ function extractMark(runs) {
   const m = RE.mark.exec(text);
   if (!m) return { runs, marks: null };
   if (m[1] && (text.match(/\[/g) || []).length > 1) return { runs, marks: null };
-  const val = Number(m[1] || m[2] || m[3]);
+  // "a) 3m  b) 4m  c) 2m  d) 5m": the last option is algebra, not a 5-mark label
+  if (m[3] && /\d\s*m$/.test(m[0].trim()) && optionItems(text)) return { runs, marks: null };
+  // a bare "(2)" counts as a mark only after some text, never as the whole line
+  if (m[4] && m.index === 0) return { runs, marks: null };
+  const val = Number(m[1] || m[2] || m[3] || m[4]);
   const cut = text.length - m[0].length + (m[0].startsWith(" ") ? 1 : 0);
   return { runs: normalizeRuns(sliceRuns(runs, 0, cut)), marks: val };
 }
@@ -460,6 +467,15 @@ class Builder {
     // a rule of dashes with the heading after it on the same line: "--------  SECTION A- HISTORY"
     const rule = RE.leadRule.exec(text);
     if (rule) { runs = normalizeRuns(sliceRuns(runs, rule[0].length)); text = plain(runs); }
+
+    // a section heading typed after a tab at the end of the previous question's line goes on as its own line
+    const tailSec = /\t\s*(section\s*[-–—:]?\s*[a-h]\b[^\t]*)$/i.exec(text);
+    if (tailSec && tailSec.index > 0 && !RE.section.test(text)) {
+      const cut = tailSec.index + tailSec[0].indexOf(tailSec[1]);
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, 0, tailSec.index)) }));
+      this.addLine(Object.assign({}, line, { runs: normalizeRuns(sliceRuns(runs, cut)), images: [], num: null }));
+      return;
+    }
 
     // a mark at the start of the next question's line: "2M  5) A. Who was …" — it belongs to the previous
     // question when that one has none (the mark wrapped from its line), else to the question that follows
@@ -542,6 +558,10 @@ class Builder {
       if (trailingOr) this.push({ kind: "or", marks: null, glued: true });
     };
 
+    // "2 3)  (A) Subtract": a space typed inside the number of the question that comes next
+    const gap = /^(\d)\s(\d)\s*[.)\]]\s*(?!\d)/.exec(text);
+    if (gap && Number(gap[1] + gap[2]) === this.lastQuestionNumber + 1) { runs = normalizeRuns([{ text: gap[1] + gap[2] }].concat(sliceRuns(runs, 3))); text = plain(runs); }
+
     // question start: "Q.1.", "1.", "16.A) (a)", "10.(A)", or Word numbering at level 0
     let qm = RE.qDot.exec(text);
     let number = null, alt = null, cut = 0;
@@ -558,7 +578,7 @@ class Builder {
     const numSub = (this.qDotStyle && bareNum != null && this.entry && this.entry.kind === "question"
       && (bareNum === this.subSeq + 1 || bareNum === 1 || bareNum !== this.lastQuestionNumber + 1)) || backwards;
     if (qm) { number = qm[1] != null ? Number(qm[1].replace(/[०-९]/g, (d) => "०१२३४५६७८९".indexOf(d))) : romanToInt(qm[2]); cut = qm[0].length; this.qDotStyle = true; }
-    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1]); alt = qm[2]; cut = qm[0].length; }
+    else if (!numSub && (qm = RE.qNumAlt.exec(text))) { number = Number(qm[1] || qm[3]); alt = qm[2] || qm[4]; cut = qm[0].length; }
     else if (!numSub && (qm = RE.qNum.exec(text))) { number = Number(qm[1]); cut = qm[0].length; }
     else if (!numSub && wordNum != null) {
       number = wordNum;
@@ -621,7 +641,7 @@ class Builder {
     // sub-part "(a) ..." / "i) ..." / "a. ..." (single label at line start)
     const sm = RE.subLabel.exec(text) || RE.subDot.exec(text) || RE.subRomanDot.exec(text) || (numSub ? RE.subNumDot.exec(text) : null);
     // "(B) …" right after OR in a question labelled (A) is the alternative, not a sub-part
-    if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^\(?B\)/.test(text)
+    if (sm && this.entry && this.entry.kind === "question" && this.entry.alt === "A" && /^(?:\(?B\)|B\.\s)/.test(text)
         && this.entry.items.length && this.entry.items[this.entry.items.length - 1].kind === "or") {
       const q = this.newQuestion(this.entry.number, "B", stripPrefix(runs, sm[0].length), marks);
       if (q.items.length) this.absorbInlineOptions(q.items[0], "runs");
@@ -917,6 +937,8 @@ class Builder {
       }
       // section marks may live on the instruction line rather than the heading
       if (!s.marksExpr) for (const r of s.instr) { const me = parseMarksExpr(plain(r)); if (me) { s.marksExpr = me; break; } }
+      // heading "(20 marks)" with "(20x1=20 m)" on the instruction line: the instruction says how the total splits
+      else if (!s.marksExpr.per) for (const r of s.instr) { const me = parseMarksExpr(plain(r)); if (me && me.per && me.total === s.marksExpr.total) { s.marksExpr = me; break; } }
       for (const e of s.entries) postProcessEntry(e, s);
     }
     return this;
@@ -957,9 +979,12 @@ function postProcessEntry(e, section) {
     let k = out.length - 1;
     while (k >= 0 && (out[k].kind === "image" || out[k].kind === "images")) k--;
     const prev = k >= 0 ? out[k] : null;
-    if (it.kind === "cont" && prev && (prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs && it.marks == null
+    // the mark may sit on the second line of a wrapped question (PDF conversions): it moves with the text
+    if (it.kind === "cont" && prev && (prev.kind === "stem" || prev.kind === "cont" || prev.kind === "sub") && prev.runs
+        && (it.marks == null || (prev.kind === "stem" ? e.marks == null || e.marks === it.marks : prev.marks == null))
         && endsOpen(plain(prev.runs)) && (startsLower(plain(it.runs)) || endsDangling(plain(prev.runs)) || fragment(plain(it.runs)))) {
       prev.runs = normalizeRuns(prev.runs.concat([{ text: " " }], it.runs));
+      if (it.marks != null) { if (prev.kind === "stem") e.marks = it.marks; else prev.marks = it.marks; }
       continue;
     }
     out.push(it);
@@ -1114,6 +1139,17 @@ function inferMarks(model) {
       if (unmarked && n >= 2 && n === x.per && n !== x.count) { [x.per, x.count] = [x.count, x.per]; x.swapped = true; }
     }
     const per = s.marksExpr && s.marksExpr.per;
+    // "Q.1) MCQ" followed by "1) … 20)" under "(1x20=20)": the numbered parts are the twenty questions, one mark each
+    if (x && x.per && x.count) {
+      for (const e of s.entries) {
+        if (e.kind !== "question" || e.marks != null) continue;
+        const numbered = e.items.filter((it) => it.kind === "sub" && /^\(\d{1,2}\)$/.test(it.label) && !it.nested);
+        if (numbered.length >= 2 && numbered.every((it) => it.marks == null) && (numbered.length === x.count || numbered.length === x.per)) {
+          const each = numbered.length === x.count ? x.per : x.count;
+          for (const it of numbered) it.marks = each;
+        }
+      }
+    }
     // questions under an "Answer any N … (NxM=T)" instruction are worth M each unless they say otherwise
     let grp = null;
     for (const e of s.entries) {
@@ -1165,6 +1201,19 @@ function inferMarks(model) {
       }
       if (e.marks != null && prevQ && prevQ.number === e.number && prevQ.marks == null) { prevQ.marks = e.marks; prevQ.marksSource = "OR twin"; }
       prevQ = e;
+    }
+    // a section heading such as "HISTORY (20 marks)" with exactly one unmarked question (often the map question):
+    // the question is worth what the other questions leave over
+    const total = s.marksExpr && s.marksExpr.total;
+    if (total && !per) {
+      const qs = s.entries.filter((e) => e.kind === "question");
+      const seen = new Map();
+      for (const e of qs) if (e.marks != null && !seen.has(e.number)) seen.set(e.number, e.marks);
+      const unmarked = qs.filter((e) => e.marks == null);
+      const rest = total - [...seen.values()].reduce((a, b) => a + b, 0);
+      // a number that comes back later (a passage whose parts restart at 1) makes the sum unreliable: leave it
+      const repeated = qs.some((e, i) => i && e.number !== qs[i - 1].number && qs.slice(0, i - 1).some((o) => o.number === e.number));
+      if (!repeated && unmarked.length === 1 && seen.size >= 2 && rest > 0 && rest <= 10) { unmarked[0].marks = rest; unmarked[0].marksSource = "section remainder"; }
     }
   }
 }

@@ -14,7 +14,7 @@ Output in `out/`:
 
 | File | What it is |
 | --- | --- |
-| `<Subject>_<Class>_<Exam>_<Session>.docx` | The paper on the template (A4, page border, header block, TNR 11, marks right-aligned as `nM`, options 4 per line, figures beside their question). |
+| `<Subject>_<Class>_<Exam>_<Session>.docx` | The paper on the template (A4, page border, header block, TNR 12, marks right-aligned as `nM`, options 4 per line, figures beside their question). |
 | `<same name>_REVIEW.md` | The review checklist result: marks arithmetic, header fields, numbering, wording, figures, and what the formatter changed. |
 
 Exit code `0` means formatted; `2` means formatted but a blocking issue was
